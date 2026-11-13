@@ -111,7 +111,7 @@ h1, h2, h3, h4, .display-type { font-family: "DM Sans", "Noto Sans", sans-serif;
 .sidebar-note span:last-child { font-size: 9px; color: #7a8982; line-height: 1.4; }
 .sidebar-version { margin: 14px 10px 0; font-size: 9px; color: #8b9691; letter-spacing: .03em; }
 .app-main { min-width: 0; flex: 1; }
-.content-area { max-width: 1420px; margin: 0 auto; padding: 36px clamp(22px, 4vw, 58px) 76px; }
+.content-area { max-width: 1200px; margin: 0 auto; padding: 36px clamp(22px, 4vw, 58px) 76px; }
 .page-header { min-height: 69px; display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; margin-bottom: 28px; }
 .page-heading-copy { display: grid; gap: 7px; }
 .eyebrow { color: #768780; font: 700 9px/1 "DM Sans", sans-serif; letter-spacing: .16em; }
@@ -357,7 +357,6 @@ h1, h2, h3, h4, .display-type { font-family: "DM Sans", "Noto Sans", sans-serif;
 /* QəbulFit responsive layout refinement — presentation only */
 .content-area {
   width: 100%;
-  max-width: 1200px;
   padding: 32px clamp(16px, 3vw, 40px) 88px;
 }
 .page-header { margin-bottom: 32px; }
@@ -428,7 +427,7 @@ h1, h2, h3, h4, .display-type { font-family: "DM Sans", "Noto Sans", sans-serif;
   display: flex;
   justify-content: flex-end;
   height: 44px;
-  margin-bottom: -44px;
+  margin-bottom: 8px;
   pointer-events: none;
 }
 .question-pdf-button {
@@ -521,10 +520,6 @@ h1, h2, h3, h4, .display-type { font-family: "DM Sans", "Noto Sans", sans-serif;
   font-size: 12px;
 }
 .mobile-nav-link svg { width: 18px; height: 18px; }
-
-@media (max-width: 1050px) {
-  .stats-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-}
 @media (max-width: 760px) {
   .content-area { padding: 24px 16px calc(56px + env(safe-area-inset-bottom) + 32px); }
   .page-header { margin-bottom: 32px; }
@@ -535,7 +530,6 @@ h1, h2, h3, h4, .display-type { font-family: "DM Sans", "Noto Sans", sans-serif;
   .question-pdf-sticky { top: 66px; }
   .question-pdf-button { min-height: 44px; padding-inline: 10px; }
   .topic-chip { flex-basis: 176px; }
-  .stats-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
 @media (max-width: 480px) {
   .stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }

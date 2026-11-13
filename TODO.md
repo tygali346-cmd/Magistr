@@ -125,3 +125,14 @@
 - [x] Düymələr və toxunuş hədəfləri: Bütün kliklənən elementlərin hündürlüyü minimum 44px olsun, kartlar arası minimum 12px boşluq.
 - [x] Şriftlər: Sual mətni minimum 16px, kiçik etiketlər minimum 12px. Uzun mövzu adları iki sətirdə kəsiləndə ellipsis (…) ilə bitir.
 - [x] Yekun: kontent və funksionallıq eyni qalmalı, yalnız vizual boşluqlar, düzən və mobil uyğunluq düzəldilməlidir.
+
+
+## 10. Responsive CSS ziddiyyətlərinin aradan qaldırılması və dərc
+
+- [x] `qebulfit-design-fix.css` faylını axtardım; tapılmadığı üçün verilməyən patch məzmununu uydurmadım, göstərilən CSS ziddiyyətlərini birbaşa `client/src/index.css` faylında düzəltdim.
+- [x] `index.css`-də 525–538-ci sətirlər ətrafındakı statistik kartları 4 sütuna qaytaran ziddiyyətli `@media` qaydalarını sildim.
+- [x] 1420px və 1200px container enlərindən yalnız birini saxladım: yeganə `max-width` 1200px-dir.
+- [x] `pnpm build` və yoxlamaları işlətdim; asılılıqlar artıq quraşdırılmış olduğundan `pnpm install` lazım olmadı.
+- [x] 375px emulyasiyada statistikanın 2×2 düzülüşünü, alt naviqasiya yazılarının oxunaqlılığını və sual kartlarının sıxlığını yoxladım.
+- [ ] Yayımlandıqdan sonra canlı saytı yenidən yoxlayıb linkini təqdim et.
+- [ ] Real telefonda ayrıca yoxla: agent fiziki telefona çıxış əldə edə bilmədiyi üçün bunu istifadəçi canlı linkdə təsdiqləyə bilər.
