@@ -7,7 +7,6 @@ import { errorMessage, type QuestionRecord } from "@/lib/study";
 export default function DashboardPage() {
   const query = trpc.questionBank.dashboard.useQuery();
   const data = query.data;
-  const maxTopicCount = Math.max(1, ...(data?.topics.map(topic => topic.count) ?? []));
   const informatika = data?.subjects.find(subject => subject.slug === "informatika");
   const mentiq = data?.subjects.find(subject => subject.slug === "mentiq");
   const topTopics = [...(data?.topics ?? [])].filter(topic => !topic.numberLabel.includes(".")).sort((a, b) => b.count - a.count).slice(0, 7);
@@ -55,11 +54,11 @@ export default function DashboardPage() {
               <SubjectCard slug="mentiq" name="Məntiq" count={mentiq?.questionCount ?? 0} topics={20} icon={Brain} logic />
             </div>
             <div className="section-title-row" style={{ marginTop: 24 }}><div><h3>Ən çox sual olan mövzular</h3><p>Arxivdəki paylanma</p></div></div>
-            {topTopics.length ? <div className="topic-count-list">
-              {topTopics.map(topic => <Link href={`/subjects/${topic.subjectId === mentiq?.id ? "mentiq" : "informatika"}/topics/${topic.slug}`} key={topic.id} className="topic-count-row">
-                <span className="topic-count-num">{topic.numberLabel.padStart(2, "0")}</span>
-                <span><span className="topic-count-name">{topic.name}</span><span className="topic-count-bar"><span style={{ width: `${Math.max(3, topic.count / maxTopicCount * 100)}%` }} /></span></span>
-                <span className="topic-count-value">{topic.count}</span>
+            {topTopics.length ? <div className="topic-count-chips">
+              {topTopics.map(topic => <Link href={`/subjects/${topic.subjectId === mentiq?.id ? "mentiq" : "informatika"}/topics/${topic.slug}`} key={topic.id} className="topic-chip">
+                <span className="topic-chip-number">{topic.numberLabel.padStart(2, "0")}</span>
+                <span className="topic-chip-name">{topic.name}</span>
+                <span className="topic-chip-count">{topic.count} sual</span>
               </Link>)}
             </div> : <div className="empty-state"><div className="empty-icon"><Layers3 size={18} /></div><h3>Hələ statistik məlumat yoxdur</h3><p>İlk suallar mövzulara əlavə edildikdə bölgü burada görünəcək.</p></div>}
           </section>
@@ -71,7 +70,7 @@ export default function DashboardPage() {
               <span className="recent-copy"><strong>{question.originalText}</strong><span className="recent-meta"><span>{question.examYear ?? "İl yoxdur"}</span><span>{question.topicName || "Mövzu yoxlanır"}</span>{question.reviewStatus === "needs_review" && <span>Yoxlanışda</span>}</span></span>
               <ArrowRight size={14} color="#9aa69f" />
             </Link>)}</div> : <div className="empty-state"><div className="empty-icon"><FileStack size={18} /></div><h3>Arxiv boşdur</h3><p>İlk PDF faylını yüklədikdə suallar burada görünəcək.</p><Link href="/uploads" className="btn btn-primary" style={{ marginTop: 14 }}>PDF yüklə</Link></div>}
-            {data.needsReview > 0 && <Link href="/review" className="notice-box" style={{ display: "block", marginTop: 15 }}><strong>{data.needsReview} sual yoxlanış üçün ayrılıb.</strong> Mətn və ya mövzu qeyri-müəyyən olduqda sual bu siyahıda qalır.<span style={{ display: "block", marginTop: 5, color: "#3f7569", fontWeight: 700 }}>Yoxlanış siyahısını aç <ArrowRight size={12} style={{ display: "inline", verticalAlign: "middle" }} /></span></Link>}
+            {data.needsReview > 0 && <Link href="/review" className="review-badge" aria-label={`${data.needsReview} sual yoxlanış üçün ayrılıb. Mətn və ya mövzu qeyri-müəyyən olduqda sual bu siyahıda qalır.`} title={`${data.needsReview} sual yoxlanış üçün ayrılıb. Mətn və ya mövzu qeyri-müəyyən olduqda sual bu siyahıda qalır.`}><ClipboardCheck size={15} /><span>Yoxlanışda {data.needsReview} sual</span><ArrowRight size={14} /></Link>}
           </section>
         </div>
       </>}

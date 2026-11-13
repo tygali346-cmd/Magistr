@@ -83,7 +83,7 @@ export default function AppShell({
             </div>
             {actions && <div className="page-header-actions">{actions}</div>}
           </div>
-          {children}
+          <div className="page-content">{children}</div>
         </main>
       </div>
 
@@ -94,7 +94,7 @@ export default function AppShell({
           { href: "/uploads", label: "PDF", icon: FileUp },
           { href: "/review", label: "Yoxlanış", icon: ClipboardCheck },
         ].map(({ href, label, icon: Icon }) => {
-          const active = href === "/" ? location === "/" : location === href || location.startsWith(`${href}/`);
+          const active = href === "/" ? location === "/" : href === "/subjects/informatika" ? location.startsWith("/subjects/") || location.startsWith("/tests/") : location === href || location.startsWith(`${href}/`);
           return <Link key={href} href={href} className={`mobile-nav-link${active ? " active" : ""}`} aria-current={active ? "page" : undefined}><Icon size={19} /><span>{label}</span></Link>;
         })}
       </nav>

@@ -2,6 +2,8 @@ import { useMemo, useState } from "react";
 import { ArrowLeft, ArrowRight, BadgeCheck, Check, CircleHelp, FileQuestion, RotateCcw, X } from "lucide-react";
 import { Link, useRoute } from "wouter";
 import AppShell from "@/components/AppShell";
+import ExpandableText from "@/components/ExpandableText";
+import QuestionMediaBlock from "@/components/QuestionMediaBlock";
 import { trpc } from "@/lib/trpc";
 import { errorMessage, getLearnerKey, type QuestionRecord, type TopicRecord } from "@/lib/study";
 
@@ -82,7 +84,7 @@ export default function PracticePage() {
           <section className="card quiz-card">
             <div className="quiz-question-top"><h2>{current.examYear ?? "İl göstərilməyib"} · Sual {current.questionNumber ?? "—"}</h2><span className={`tag${current.hasVerifiedAnswer ? " success" : " warning"}`}>{current.hasVerifiedAnswer ? "Cavab test sonunda açıqlanacaq" : "Etibarlı cavab açarı yoxdur"}</span></div>
             <p className="quiz-question">{current.originalText}</p>
-            {current.media?.map((media, index) => <div className="question-media" key={`${media.kind}-${index}`}><strong>{media.label || (media.kind === "table" ? "Cədvəl" : "Düstur")}</strong><pre>{media.value}</pre></div>)}
+            {current.media?.map((media, index) => <QuestionMediaBlock media={media} key={`${media.kind}-${index}`} />)}
             <div className="quiz-options">
               {current.options.map(option => <button type="button" key={option.id} className={`quiz-option${answers[current.id] === option.label ? " selected" : ""}`} onClick={() => setAnswers(previous => ({ ...previous, [current.id]: option.label }))} aria-pressed={answers[current.id] === option.label}>
                 <span className="quiz-option-mark">{option.label}</span><span>{option.optionText}</span>
@@ -101,7 +103,7 @@ export default function PracticePage() {
           <div className="result-stats"><div className="result-stat good"><strong>{result.correctCount}</strong><span>Düzgün</span></div><div className="result-stat bad"><strong>{result.incorrectCount}</strong><span>Səhv</span></div><div className="result-stat neutral"><strong>{result.unscoredCount}</strong><span>Yoxlanılmamış</span></div></div>
           {wrong.length > 0 ? <><div className="section-title-row"><div><h3>Səhv cavablar</h3><p>Yenidən nəzərdən keçirin</p></div></div><div className="review-stack">{wrong.map(question => {
             const answer = resultByQuestion.get(question.id);
-            return <div className="card review-card" key={question.id}><div className="question-tags"><span className="question-number">Sual {question.questionNumber}</span><span className="tag warning"><X size={12} /> Səhv</span></div><p className="question-text" style={{ marginTop: 9 }}>{question.originalText}</p><p className="caption">Seçiminiz: {answer?.selectedOption ?? "Cavab seçilməyib"} · Təsdiqlənmiş cavab: {answer?.verifiedCorrectOption ?? "—"}</p></div>;
+            return <div className="card review-card" key={question.id}><div className="question-tags"><span className="question-number">Sual {question.questionNumber}</span><span className="tag warning"><X size={12} /> Səhv</span></div><ExpandableText text={question.originalText} /><p className="caption">Seçiminiz: {answer?.selectedOption ?? "Cavab seçilməyib"} · Təsdiqlənmiş cavab: {answer?.verifiedCorrectOption ?? "—"}</p></div>;
           })}</div></> : <div className="notice-box">Yoxlanmış suallar arasında səhv cavab yoxdur.</div>}
           <p className="caption" style={{ marginTop: 14 }}>Bu nəticə anonim brauzer açarınızla saxlanıb. Nəticələr hesablananda düzgün cavabı məlum olmayan suallar çıxarılır.</p>
         </section>}

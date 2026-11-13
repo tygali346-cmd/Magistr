@@ -352,3 +352,200 @@ h1, h2, h3, h4, .display-type { font-family: "DM Sans", "Noto Sans", sans-serif;
   .upload-job { grid-template-columns: minmax(0, 1fr); }
   .upload-job > .tag { justify-self: start; }
 }
+
+
+/* QəbulFit responsive layout refinement — presentation only */
+.content-area {
+  width: 100%;
+  max-width: 1200px;
+  padding: 32px clamp(16px, 3vw, 40px) 88px;
+}
+.page-header { margin-bottom: 32px; }
+.page-content {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: clamp(32px, 3.5vw, 40px);
+}
+.page-content > * { margin-block: 0 !important; }
+.dashboard-hero, .stats-grid, .subject-intro, .filter-panel { margin-bottom: 0; }
+.dashboard-hero { gap: 20px; }
+.dashboard-columns { gap: 18px; }
+.question-list, .review-stack { gap: 12px; }
+.quiz-layout { display: flex; flex-direction: column; gap: 32px; }
+.quiz-layout > * { margin-block: 0 !important; }
+
+.btn, .icon-button, .field, .select-field, .text-field { min-height: 44px; }
+.icon-button { width: 44px; height: 44px; }
+.nav-link { min-height: 44px; }
+.subject-card, .topic-count-row, .recent-row { min-height: 44px; }
+.topic-row { min-height: 72px; }
+.question-source a, .file-row-link { min-height: 44px; }
+
+.stat-label, .stat-sub, .tag, .caption, .small, .field-label,
+.filter-field label, .eyebrow, .nav-group-label, .nav-link,
+.brand-copy span, .sidebar-note strong, .sidebar-note span:last-child,
+.sidebar-version, .hero-kicker, .hero-side-label, .hero-side p,
+.subject-card-copy span, .subject-card-count span, .topic-count-num,
+.topic-count-value, .topic-copy span, .topic-question-count,
+.question-number, .option-line-label, .question-source,
+.quiz-progress-head, .quiz-question-top h2, .quiz-option-mark,
+.result-stat span, .drop-zone p, .upload-side p, .upload-file-row span,
+.processing-item, .upload-job h3, .upload-job p, .file-row-link,
+.mobile-nav-link {
+  font-size: max(12px, 1em);
+}
+.question-text, .quiz-question { font-size: 16px; line-height: 1.65; }
+.option-line { font-size: 14px; }
+.tag { line-height: 1.25; }
+
+.expandable-question-text { min-width: 0; }
+.question-text:not(.expanded) {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+}
+.question-expand-btn {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  margin-top: 2px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--app-teal);
+  background: transparent;
+  font-size: 12px;
+  font-weight: 700;
+}
+.question-expand-btn:hover { background: #eaf3ee; }
+.question-pdf-sticky {
+  position: sticky;
+  z-index: 6;
+  top: 8px;
+  display: flex;
+  justify-content: flex-end;
+  height: 44px;
+  margin-bottom: -44px;
+  pointer-events: none;
+}
+.question-pdf-button {
+  pointer-events: auto;
+  box-shadow: 0 3px 12px #19312d20;
+}
+.question-card-head { padding-right: 126px; }
+.question-media-table { min-width: 0; }
+.question-table-scroll {
+  max-width: 100%;
+  margin-top: 6px;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  -webkit-overflow-scrolling: touch;
+  border: 1px solid #e1e9e3;
+  border-radius: 7px;
+}
+.question-media-table pre {
+  width: max-content;
+  min-width: 100%;
+  margin: 0;
+  padding: 8px;
+  white-space: pre;
+}
+
+.topic-count-chips {
+  display: flex;
+  gap: 8px;
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 2px 1px 9px;
+  overscroll-behavior-inline: contain;
+  scroll-snap-type: x proximity;
+  -webkit-overflow-scrolling: touch;
+}
+.topic-chip {
+  display: grid;
+  flex: 0 0 190px;
+  min-width: 0;
+  min-height: 92px;
+  align-content: space-between;
+  gap: 7px;
+  padding: 12px;
+  border: 1px solid var(--app-line);
+  border-radius: 13px;
+  color: #41564e;
+  background: #fbfcf8;
+  scroll-snap-align: start;
+}
+.topic-chip:hover { border-color: #a9c8bb; background: #f3f8f3; }
+.topic-chip-number { color: #84928b; font: 700 12px/1 "DM Sans", sans-serif; }
+.topic-chip-name, .topic-copy strong {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  text-overflow: ellipsis;
+}
+.topic-chip-name { color: #354c42; font-size: 13px; line-height: 1.35; }
+.topic-chip-count { color: #74867d; font-size: 12px; font-weight: 700; }
+.topic-copy strong { font-size: 13px; line-height: 1.4; }
+.review-badge {
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
+  min-height: 44px;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  border: 1px solid #e3e9d0;
+  border-radius: 999px;
+  color: #5d6942;
+  background: #f7f9e9;
+  font-size: 12px;
+  font-weight: 700;
+}
+.review-badge svg:last-child { flex: 0 0 auto; color: #3f7569; }
+
+.mobile-header .icon-button { min-width: 44px; }
+.mobile-nav {
+  height: calc(56px + env(safe-area-inset-bottom));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  align-items: center;
+  padding: 3px max(8px, env(safe-area-inset-left)) env(safe-area-inset-bottom);
+}
+.mobile-nav-link {
+  min-height: 48px;
+  gap: 2px;
+  font-size: 12px;
+}
+.mobile-nav-link svg { width: 18px; height: 18px; }
+
+@media (max-width: 1050px) {
+  .stats-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+@media (max-width: 760px) {
+  .content-area { padding: 24px 16px calc(56px + env(safe-area-inset-bottom) + 32px); }
+  .page-header { margin-bottom: 32px; }
+  .page-header-actions .btn { min-height: 44px; padding-inline: 12px; font-size: 12px; }
+  .mobile-nav-link { min-height: 48px; }
+  .question-card { padding: 15px; }
+  .question-card-head { padding-right: 0; }
+  .question-pdf-sticky { top: 66px; }
+  .question-pdf-button { min-height: 44px; padding-inline: 10px; }
+  .topic-chip { flex-basis: 176px; }
+  .stats-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+@media (max-width: 480px) {
+  .stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .stat-card { min-height: 88px; }
+  .question-card-head { padding-top: 0; }
+  .question-pdf-sticky { top: 66px; }
+  .topic-chip { flex-basis: 164px; }
+}
+
+/* Final touch-target and card-list guarantees */
+.brand-row, .hero-side-link, .topic-chip { min-height: 44px; }
+.subject-card-grid, .upload-file-list, .upload-jobs, .result-stats, .quiz-options { gap: 12px; }
+.question-media-table { width: 100%; max-width: 100%; }

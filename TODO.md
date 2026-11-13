@@ -110,3 +110,18 @@
 - [x] Mobil və kompüter ekranlarına uyğunlaşmalıdır.
 - [x] Sualın mənbəyi hər zaman görünməlidir.
 - [x] İş zamanı heç bir sualı səssizcə buraxma, məzmununu dəyişdirmə və ya cavabını uydurma. Əgər sualın oxunması və ya mövzuya aid edilməsi şübhəlidirsə, onu ayrıca yoxlanış siyahısına yerləşdir.
+
+
+## 9. Dizayn və layout düzəlişləri — kontent dəyişmədən
+
+- [x] Viewport və ümumi hizalanma: `<meta name="viewport" content="width=device-width, initial-scale=1">` təsdiq et. Maksimum məzmun enini 1200px mərkəzlə, yan boşluqları (padding) bütün bölmələrdə eyni saxla — indi bəzi bloklar kənara yapışır, bəziləri aralıqdadır.
+- [x] Uzun sual mətnləri: Hər sual kartında ilk 2–3 sətirdən artıq mətni gizlət, altında “Əsas mətni aç / Bağla” düyməsi qoy. Kart hündürlüyü eyni qalsın ki, siyahıda boş yerlər yaranmasın.
+- [x] Cədvəl olan suallar: Cədvəl sınıq görünməsin deyə, onu ayrıca blokda, üfüqi scroll ilə göstər (`overflow-x: auto`). Cədvəl eni kartdan böyük olsa belə düzəni pozulmasın.
+- [x] Mövzu paylanması: “Ən çox sual olan mövzular” siyahısını yatay scroll edilən çiplər sırasına çevir — mətn sıxışıb qalmasın, çiplər arasında bərabər boşluq (8px) olsun.
+- [x] İcmal statistikası: Telefonda (480px-dən aşağı) 4 statistik kart 2×2 grid düzülüşündə olsun. Masaüstündə bir sıra 4 kart.
+- [x] Yapışqan PDF düyməsi: Sual kartları siyahısında “PDF yüklə” düyməsi scroll zamanı da əlçatan olsun — kartın içində yuxarı yapışqan vəziyyətdə qalsın.
+- [x] Alt naviqasiya: İcmal / Fənlər / PDF / Yoxlanış bölmələri üçün aşağıda 4 tab-lı naviqasiya əlavə et (yalnız mobil görünüşdə, hündürlük ~56px, ikon + qısa mətn). Aktiv tab fərqlənsin.
+- [x] Boşluq balansı: Bölmələr arası boşluq (margin) bütün səhifədə 32–48px arası eyni olsun. “Yoxlanışda 3 sual” banneri uzun scroll-da kiçik badge-ə çevrilsin, tam en tutmasın.
+- [x] Düymələr və toxunuş hədəfləri: Bütün kliklənən elementlərin hündürlüyü minimum 44px olsun, kartlar arası minimum 12px boşluq.
+- [x] Şriftlər: Sual mətni minimum 16px, kiçik etiketlər minimum 12px. Uzun mövzu adları iki sətirdə kəsiləndə ellipsis (…) ilə bitir.
+- [x] Yekun: kontent və funksionallıq eyni qalmalı, yalnız vizual boşluqlar, düzən və mobil uyğunluq düzəldilməlidir.

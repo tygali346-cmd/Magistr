@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { FileText, Filter, Save, ShieldCheck } from "lucide-react";
 import { useLocation } from "wouter";
 import AppShell from "@/components/AppShell";
+import ExpandableText from "@/components/ExpandableText";
+import QuestionMediaBlock from "@/components/QuestionMediaBlock";
 import { trpc } from "@/lib/trpc";
 import { errorMessage, type QuestionRecord, type TopicRecord } from "@/lib/study";
 
@@ -69,10 +71,11 @@ function ReviewEditor({ question, topics, subjects, onSave, saving }: { question
 
   return (
     <article id={`review-${question.id}`} className="card review-card">
-      <div className="question-card-head"><div className="question-tags"><span className="question-number">{question.examYear ?? "İl məlum deyil"} · Sual {question.questionNumber ?? "—"}</span><span className="tag warning">Əminlik {question.classificationConfidence === null ? "—" : `${Math.round(question.classificationConfidence * 100)}%`}</span><span className="tag">{question.sourceFilename ?? "Mənbə bilinmir"}</span>{question.hasVerifiedAnswer && <span className="tag success">Mənbəli cavab mövcuddur</span>}</div>{question.sourceUrl && !question.sourceUrl.startsWith("manual://") && <a className="icon-button" href={question.sourcePage ? `${question.sourceUrl}#page=${question.sourcePage}` : question.sourceUrl} target="_blank" rel="noreferrer" aria-label="Orijinal PDF-i aç"><FileText size={15} /></a>}</div>
-      <div className="question-text">{question.originalText}</div>
+      {question.sourceUrl && !question.sourceUrl.startsWith("manual://") && <div className="question-pdf-sticky"><a className="btn btn-secondary question-pdf-button" href={question.sourcePage ? `${question.sourceUrl}#page=${question.sourcePage}` : question.sourceUrl} target="_blank" rel="noreferrer"><FileText size={14} /> PDF yüklə</a></div>}
+      <div className="question-card-head"><div className="question-tags"><span className="question-number">{question.examYear ?? "İl məlum deyil"} · Sual {question.questionNumber ?? "—"}</span><span className="tag warning">Əminlik {question.classificationConfidence === null ? "—" : `${Math.round(question.classificationConfidence * 100)}%`}</span><span className="tag">{question.sourceFilename ?? "Mənbə bilinmir"}</span>{question.hasVerifiedAnswer && <span className="tag success">Mənbəli cavab mövcuddur</span>}</div></div>
+      <ExpandableText text={question.originalText} />
       {question.options.length > 0 && <div className="question-options">{question.options.map(option => <div className="option-line" key={option.id}><span className="option-line-label">{option.label}</span><span>{option.optionText}</span></div>)}</div>}
-      {question.media?.map((media, index) => <div className="question-media" key={`${media.kind}-${index}`}><strong>{media.label ?? media.kind}</strong><pre>{media.value}</pre></div>)}
+      {question.media?.map((media, index) => <QuestionMediaBlock media={media} key={`${media.kind}-${index}`} />)}
       {question.classificationReason && <p className="caption" style={{ marginTop: 10 }}><strong>Təsnifat səbəbi:</strong> {question.classificationReason}</p>}
       <div className="review-edit-grid">
         <div><label className="field-label" htmlFor={`subject-${question.id}`}>Fənn</label><select id={`subject-${question.id}`} className="select-field" value={subjectId} onChange={event => { setSubjectId(event.target.value); setTopicId(""); setSubtopicId(""); }}><option value="">Fənn seçin</option>{subjects.map(subject => <option key={subject.id} value={subject.id}>{subject.name}</option>)}</select></div>
