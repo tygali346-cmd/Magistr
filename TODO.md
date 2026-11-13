@@ -134,5 +134,5 @@
 - [x] 1420px və 1200px container enlərindən yalnız birini saxladım: yeganə `max-width` 1200px-dir.
 - [x] `pnpm build` və yoxlamaları işlətdim; asılılıqlar artıq quraşdırılmış olduğundan `pnpm install` lazım olmadı.
 - [x] 375px emulyasiyada statistikanın 2×2 düzülüşünü, alt naviqasiya yazılarının oxunaqlılığını və sual kartlarının sıxlığını yoxladım.
-- [ ] Yayımlandıqdan sonra canlı saytı yenidən yoxlayıb linkini təqdim et.
+- [x] Yayımlandıqdan sonra canlı saytı yenidən yoxladım; link aşağıdadır.
 - [ ] Real telefonda ayrıca yoxla: agent fiziki telefona çıxış əldə edə bilmədiyi üçün bunu istifadəçi canlı linkdə təsdiqləyə bilər.
