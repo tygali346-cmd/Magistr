@@ -145,3 +145,12 @@
 - [x] Uzun mətn kart sərhədindən çıxmamalı, sözlər uyğun sətirdə qırılmalıdır.
 - [x] Düzülüş `Flexbox` və ya `CSS Grid` ilə `space-between` və `center` hizalanmasını təmin etməlidir.
 - [x] Mövcud tətbiq texnologiyasına uyğun React komponenti və adi CSS istifadə edilməli; kontent və rəqəmlərin dəyəri dəyişdirilməməlidir.
+
+
+## 12. Son suallar siyahısında mobil overflow-un aradan qaldırılması
+
+- [x] Son suallar kartında başlıq mobil ölçüdə bir sətrə sıxılmamalı; kart daxilində maksimum 2 sətirdə qırılmalıdır.
+- [x] Sual nömrəsi, mətn və ox üçün `minmax(0, 1fr)`-li grid və minimum en sıfır olan mətn sütunu istifadə edilməlidir.
+- [x] Uzun və bitişik mətn kart sərhədindən və ekran enindən kənara çıxmamalıdır; il və mövzu metadatası sətirə keçə bilməlidir.
+- [x] Sual məzmunu, nömrələr və imtahan ili dəyişdirilməməlidir.
+- [x] 375px enində mobil görünüşdə üfüqi daşma olmamalı və siyahı kartları düzgün düzülməlidir.

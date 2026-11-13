@@ -181,13 +181,15 @@ h1, h2, h3, h4, .display-type { font-family: "DM Sans", "Noto Sans", sans-serif;
 .topic-count-bar { height: 4px; margin-top: 6px; overflow: hidden; background: #edf1ed; border-radius: 5px; }
 .topic-count-bar > span { display: block; height: 100%; background: #75a89a; border-radius: inherit; }
 .topic-count-value { text-align: right; color: #77857e; font: 600 10px "DM Sans", sans-serif; }
-.recent-list { display: grid; }
-.recent-row { display: flex; align-items: flex-start; gap: 12px; padding: 13px 0; border-top: 1px solid #edf0ec; }
+.recent-list { display: grid; width: 100%; min-width: 0; }
+.recent-row { display: grid; grid-template-columns: 32px minmax(0, 1fr) 18px; align-items: start; gap: 12px; width: 100%; min-width: 0; padding: 13px 0; border-top: 1px solid #edf0ec; }
 .recent-row:first-child { border-top: 0; padding-top: 2px; }
-.recent-number { flex: 0 0 32px; height: 32px; display: grid; place-items: center; border-radius: 10px; color: #3f6c5f; background: #edf4ef; font: 700 10px "DM Sans", sans-serif; }
-.recent-copy { min-width: 0; flex: 1; }
-.recent-copy strong { display: block; overflow: hidden; color: #33473f; font-size: 11px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-.recent-meta { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 5px; color: #829088; font-size: 9px; }
+.recent-number { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 10px; color: #3f6c5f; background: #edf4ef; font: 700 10px "DM Sans", sans-serif; }
+.recent-copy { display: grid; min-width: 0; }
+.recent-copy strong { display: -webkit-box; min-width: 0; overflow: hidden; color: #33473f; font-size: 16px; font-weight: 600; line-height: 1.45; overflow-wrap: anywhere; word-break: normal; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; }
+.recent-meta { display: flex; flex-wrap: wrap; gap: 7px; min-width: 0; max-width: 100%; margin-top: 5px; color: #829088; font-size: 9px; }
+.recent-meta > span { min-width: 0; max-width: 100%; overflow-wrap: anywhere; word-break: normal; }
+.recent-row > svg { justify-self: end; margin-top: 9px; }
 
 .subject-intro { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 18px 20px; margin-bottom: 15px; border-radius: 15px; border: 1px solid #dbe8df; background: linear-gradient(120deg, #edf5f0, #f7f8ed); }
 .subject-intro p { margin: 0; color: #61766d; font-size: 11px; line-height: 1.65; }
