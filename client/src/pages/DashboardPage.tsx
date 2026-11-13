@@ -79,9 +79,31 @@ export default function DashboardPage() {
 }
 
 function Stat({ icon: Icon, label, value, sub }: { icon: typeof BookOpenCheck; label: string; value: number; sub: string }) {
-  return <div className="stat-card"><span className="stat-icon"><Icon size={16} /></span><span><span className="stat-label">{label}</span><strong className="stat-value">{value}</strong><span className="stat-sub">{sub}</span></span></div>;
+  return (
+    <div className="stat-card">
+      <span className="stat-icon" aria-hidden="true"><Icon size={16} /></span>
+      <span className="stat-copy">
+        <span className="stat-label">{label}</span>
+        <span className="stat-sub">{sub}</span>
+      </span>
+      <strong className="stat-value">{value}</strong>
+    </div>
+  );
 }
 
 function SubjectCard({ slug, name, count, topics, icon: Icon, logic = false }: { slug: string; name: string; count: number; topics: number; icon: typeof BookOpenCheck; logic?: boolean }) {
-  return <Link href={`/subjects/${slug}`} className="subject-card"><span className={`subject-icon${logic ? " logic" : ""}`}><Icon size={19} /></span><span className="subject-card-copy"><strong>{name}</strong><span>{topics} mövzu · {count ? "suallar hazırdır" : "mövzular hazır, suallar gözlənilir"}</span></span><span className="subject-card-count"><strong>{count}</strong><span>sual</span></span><ArrowRight size={15} color="#98a49d" /></Link>;
+  return (
+    <Link href={`/subjects/${slug}`} className="subject-card">
+      <span className={`subject-icon${logic ? " logic" : ""}`} aria-hidden="true"><Icon size={19} /></span>
+      <span className="subject-card-copy">
+        <strong>{name}</strong>
+        <span>{count ? "Suallar hazırdır" : "Mövzular hazır, suallar gözlənilir"}</span>
+      </span>
+      <span className="subject-card-stats" aria-label={`${count} sual, ${topics} mövzu`}>
+        <span className="subject-card-metric"><span>sual</span><strong>{count}</strong></span>
+        <span className="subject-card-metric"><span>mövzu</span><strong>{topics}</strong></span>
+      </span>
+      <ArrowRight size={15} color="#98a49d" aria-hidden="true" />
+    </Link>
+  );
 }

@@ -136,3 +136,12 @@
 - [x] 375px emulyasiyada statistikanın 2×2 düzülüşünü, alt naviqasiya yazılarının oxunaqlılığını və sual kartlarının sıxlığını yoxladım.
 - [x] Yayımlandıqdan sonra canlı saytı yenidən yoxladım; link aşağıdadır.
 - [ ] Real telefonda ayrıca yoxla: agent fiziki telefona çıxış əldə edə bilmədiyi üçün bunu istifadəçi canlı linkdə təsdiqləyə bilər.
+
+
+## 11. Mobil kartlarda mətn və rəqəm düzülüşü
+
+- [x] Kartdakı rəqəm həmişə sağ tərəfdə, mətn isə solda ayrıca bloklarda yerləşməlidir.
+- [x] Mətn və rəqəm arasında görünən `gap`/boşluq olmalıdır.
+- [x] Uzun mətn kart sərhədindən çıxmamalı, sözlər uyğun sətirdə qırılmalıdır.
+- [x] Düzülüş `Flexbox` və ya `CSS Grid` ilə `space-between` və `center` hizalanmasını təmin etməlidir.
+- [x] Mövcud tətbiq texnologiyasına uyğun React komponenti və adi CSS istifadə edilməli; kontent və rəqəmlərin dəyəri dəyişdirilməməlidir.
