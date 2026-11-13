@@ -1,0 +1,112 @@
+# TODO — QəbulFit
+
+## 1. Fənlər, mövzular və ilkin sual bazası
+
+- [x] Tətbiqdə iki əsas fənn olmalıdır: İnformatika və Məntiq.
+- [x] İnformatika üçün aşağıdakı 18 mövzu yaradılmalı, nömrə və adlar olduğu kimi qorunmalıdır:
+  1. İnformatika və Onun Əsas Anlayışları
+  2. Say Sistemləri
+  3. EHM (Hardware)
+  4. Kompüterin Texniki Təminatı
+  5. Alqoritm (Brainware)
+  6. Proqram Təminatı (Software)
+  7. Əməliyyat Sistemləri
+  8. Windows 11
+  9. MS Word 2019
+  10. MS Excel 2019
+  11. MS PowerPoint 2019
+  12. Verilənlər Bazası (VBİS)
+  13. MS Access 2019
+  14. Kompüter Qrafikası
+  15. Kompüter Şəbəkələri
+  16. İnternet Qlobal Şəbəkələri
+  17. Elektron Hökumət
+  18. İnformasiya Təhlükəsizliyi
+- [x] Məntiq üçün aşağıdakı 20 əsas mövzu yaradılmalı, nömrə və adlar olduğu kimi qorunmalıdır:
+  1. Şifrələr
+  2. Riyazi Əməllər
+  3. Şəklin Analizi
+  4. Əməllər (Qeyri-Aşkar Operatorlar)
+  5. Şəkil Münasibətləri
+  6. Ardıcıllıqlar
+     - 6.1. Sıralar (6-cı mövzunun alt mövzusu)
+  7. Şəkil Ardıcıllıqları
+  8. Mətnin Məntiqi Təhlili
+  9. Rebus
+  10. Şəkil Cədvəlləri
+  11. Cədvəllər
+  12. Analogiya-Anagram
+  13. Hesab Əməlləri
+  14. Tərəzilər
+  15. Sahə-Perimetr
+  16. Müstəvi Təsəvvür
+  17. Cədvəl-Qrafik-Diaqram
+  18. Fəza Fiqurları
+  19. Tənqidi Mühakimə Məsələləri
+  20. Riyazi Məsələlər
+- [x] 21–24-cü bölmələrdəki model imtahanları mövzu siyahısına daxil edilməməlidir. Mövzuların adları və nömrələri qorunmalıdır. Özbaşına yeni mövzu yaradılmamalıdır.
+- [x] Hazırda 2010–2011-ci illərə aid "2010-11.pdf" faylı təqdim edilib. Bu fayldakı 50 sualın hamısı İnformatika fənninə aiddir: 2010-cu il – 25 sual; 2011-ci il – 25 sual. Bu 50 sualın hamısını İnformatika fənninin uyğun mövzularına təsnif et.
+- [x] Vacib: Bu fayldan Məntiq bölməsinə heç bir sual əlavə etmə. Məntiq fənni və onun mövzuları tətbiqdə hazır vəziyyətdə olsun, lakin hələlik boş qalsın. Gələcəkdə həmin fənnə aid faylları ayrıca yükləyəcəyəm.
+
+## 2. PDF yükləmə, çıxarış və mənbənin qorunması
+
+- [x] İstifadəçi bir və ya bir neçə PDF faylı yükləyə bilməlidir.
+- [x] Faylın hansı illərə aid olduğu müəyyənləşdirilməlidir.
+- [x] PDF-dən suallar, cavab variantları, şəkillər, cədvəllər, düsturlar və digər vacib elementlər çıxarılmalıdır.
+- [x] Sualın orijinal görünüşü və məzmunu qorunmalıdır.
+- [x] Skan edilmiş PDF-lər üçün OCR texnologiyasından istifadə edilməlidir.
+- [x] Sualın hansı ilin imtahanından və hansı nömrə ilə götürüldüyü saxlanmalıdır.
+- [x] Sualın orijinal mətni dəyişdirilməməlidir. OCR zamanı yaranan səhvlər aşkarlanarsa, düzəliş təklif edilməli və orijinal mənbə ilə müqayisə imkanı saxlanmalıdır.
+- [x] Şəkildən asılı olan suallarda şəkil mütləq qorunmalıdır. Şəkil çıxarıla bilmirsə, həmin sual itirilməməli, yoxlanış üçün işarələnməlidir.
+- [x] Yükləmə interfeysi hər PDF üçün gözlənilən sual sayını istəyə bağlı qəbul edir; çıxarış sayı bu göstərici ilə uyğun gəlmirsə və ya AI tamlığı təsdiqləmirsə, nəticə yoxlanış üçün işarələnir.
+- [x] Sual çıxmayan fayl uğurlu kimi göstərilmir; uğursuz PDF arxivdən yenidən emal edilə bilər.
+
+## 3. AI təsnifatı, düzəliş və təkrarın qarşısının alınması
+
+- [x] Hər sualın məzmunu təhlil edilməlidir.
+- [x] Sual uyğun mövzuya yerləşdirilməlidir.
+- [x] Təsnifat yalnız açar sözlərə əsaslanmamalı, sualın məntiqi və yoxladığı bilik nəzərə alınmalıdır.
+- [x] Bir neçə mövzuya uyğun gələn suallarda əsas mövzu seçilməlidir.
+- [x] Əminlik aşağıdırsa, sual avtomatik təsnif edilmək əvəzinə yoxlanış üçün işarələnməlidir.
+- [x] İstifadəçi sualın mövzusunu əl ilə dəyişə bilməlidir.
+- [x] Eyni sualın təkrar yüklənməsi mümkün qədər müəyyən edilməlidir.
+- [x] İş zamanı heç bir sualı səssizcə buraxma, məzmununu dəyişdirmə və ya cavabını uydurma. Əgər sualın oxunması və ya mövzuya aid edilməsi şübhəlidirsə, onu ayrıca yoxlanış siyahısına yerləşdir.
+
+## 4. Sual qeydləri, mənbə və davamlı saxlanma
+
+- [x] Hər sual üçün aşağıdakı məlumatlar saxlanmalıdır: Fənn; Mövzu; Alt mövzu (olduğu halda); İmtahan ili; Sual nömrəsi; Sualın tam mətni; Cavab variantları; Şəkil, cədvəl və ya düstur; Düzgün cavab (yalnız etibarlı mənbədən məlumdursa); Mənbə PDF faylı; Təsnifatın yoxlanış statusu.
+- [x] Düzgün cavabı məlum olmayan suallarda sistem cavabı uydurmamalıdır. Belə suallarda cavab yoxlanışı deaktiv edilməli və ya ayrıca yoxlanış statusu göstərilməlidir.
+- [x] Suallar məlumat bazasında saxlanmalıdır.
+- [x] Məlumatlar yenilənəndə itirilməməlidir.
+- [x] Sualın mənbəyi hər zaman görünməlidir.
+- [x] Mövcud sualların təkrarlanmasının qarşısı alınmalıdır.
+- [x] Sistem gələcəkdə çoxlu sayda PDF və sualı idarə edə bilməlidir.
+- [x] Cavab açarı və onun mənbə qeydi sual siyahısı, baxış, review növbəsi və backup cavablarında açıqlanmır; mənbə ilə təsdiqlənmiş cavab yalnız test tamamlandıqdan sonra nəticədə göstərilə bilər.
+
+## 5. Əsas səhifə, fənlər, mövzular və filtrlər
+
+- [x] Müasir, rahat, səliqəli və mobil telefonlarda da düzgün işləyən dizayn hazırla.
+- [x] Əsas səhifədə İnformatika; Məntiq; Yüklənmiş imtahanlar; Ümumi sual sayı; Mövzular üzrə sual sayı; Son əlavə edilən suallar göstərilsin.
+- [x] İstifadəçi İnformatika bölməsinə daxil olduqda 18 mövzunu, Məntiq bölməsinə daxil olduqda isə 20 mövzunu görməlidir.
+- [x] Mövzu seçildikdə həmin mövzuya aid suallar siyahı şəklində göstərilsin.
+- [x] Filtrlər: İmtahan ili; Mövzu; Alt mövzu; Sual nömrəsi.
+- [x] İstifadəçi istədiyi ilin və ya bütün illərin suallarına baxa bilməlidir.
+
+## 6. Test rejimi və nəticələr
+
+- [x] İstifadəçi mövzu daxilindəki sualları test şəklində həll edə bilməlidir.
+- [x] Test rejimində: Suallar ardıcıl göstərilsin; Cavab variantları seçilə bilsin; Cavab seçildikdən sonra növbəti suala keçmək mümkün olsun; Test bitdikdə nəticə göstərilsin; Düzgün və səhv cavabların sayı hesablansın; Faiz göstəricisi təqdim edilsin; Səhv cavablar yenidən nəzərdən keçirilə bilsin; İstifadəçi istəsə, yalnız müəyyən bir ilin suallarını həll etsin.
+- [x] Düzgün cavabı məlum olmayan suallarda sistem cavabı uydurmamalıdır. Belə suallarda cavab yoxlanışı deaktiv edilməli və ya ayrıca yoxlanış statusu göstərilməlidir.
+
+## 7. Gələcək genişlənmə imkanları
+
+- [x] Arxitekturanı elə qur ki, gələcəkdə aşağıdakı funksiyalar əlavə edilə bilsin: Yeni illərin PDF fayllarının yüklənməsi; Yeni sualların mövcud mövzulara avtomatik əlavə edilməsi; İstifadəçinin öz sualını əlavə etməsi; Mövzular üzrə statistika; Ən çox səhv edilən suallar; Çətinlik səviyyəsinə görə filtr; Qarışıq sınaq imtahanları; Məntiq sualları üçün rəqəmsal qaralama sahəsi və qələm aləti; Sualların ixracı və ehtiyat nüsxəsi.
+
+## 8. İşlək tətbiq və texniki keyfiyyət
+
+- [x] Tətbiq həqiqətən işlək olmalıdır, yalnız dizayn maketi olmamalıdır.
+- [x] PDF yükləmə və emal prosesi real işləməlidir.
+- [x] Mövzular üzrə təsnifat yoxlanıla və düzəldilə bilməlidir.
+- [x] Mobil və kompüter ekranlarına uyğunlaşmalıdır.
+- [x] Sualın mənbəyi hər zaman görünməlidir.
+- [x] İş zamanı heç bir sualı səssizcə buraxma, məzmununu dəyişdirmə və ya cavabını uydurma. Əgər sualın oxunması və ya mövzuya aid edilməsi şübhəlidirsə, onu ayrıca yoxlanış siyahısına yerləşdir.

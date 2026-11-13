@@ -1,0 +1,1 @@
+ALTER TABLE `examFiles` ADD `expectedQuestionCount` int;

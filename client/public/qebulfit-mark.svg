@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="QəbulFit açıq kitab Q nişanı">
+  <rect width="64" height="64" rx="16" fill="#0f7668"/>
+  <path d="M44.3 18.6a16.1 16.1 0 1 0 0 22.8L54 51" fill="none" stroke="#fffefa" stroke-width="4.4" stroke-linecap="round"/>
+  <path d="M19.4 26.2c5.2-2.3 9.5-1.8 12.6 1.1v14.1c-3.6-2.7-7.8-3.1-12.6-1.2V26.2Z" fill="#d9ef76" stroke="#fffefa" stroke-width="1.6" stroke-linejoin="round"/>
+  <path d="M44.6 26.2c-5.2-2.3-9.5-1.8-12.6 1.1v14.1c3.6-2.7 7.8-3.1 12.6-1.2V26.2Z" fill="#f8fcf3" stroke="#fffefa" stroke-width="1.6" stroke-linejoin="round"/>
+  <path d="M32 27.3v14.1" stroke="#0f7668" stroke-width="1.8" stroke-linecap="round"/>
+</svg>
