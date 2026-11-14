@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { completenessWarnings, inferYears } from "./questionBank";
+import { completenessWarnings, inferYears, planSourceFingerprints } from "./questionBank";
 
 describe("completenessWarnings", () => {
   it("does not warn for a likely-complete extraction just because it has a note", () => {
@@ -37,5 +37,39 @@ describe("inferYears", () => {
     ["sənəd.pdf", []],
   ])("infers years from %s", (filename, expected) => {
     expect(inferYears(filename)).toEqual(expected);
+  });
+});
+
+describe("planSourceFingerprints", () => {
+  const fileSha = "a".repeat(64);
+
+  it("keeps the original fingerprint and adds a stable subject suffix to an in-import collision", () => {
+    const imported = [
+      { examYear: 2010, questionNumber: 22, subjectSlug: "informatika" as const },
+      { examYear: 2010, questionNumber: 22, subjectSlug: "mentiq" as const },
+    ];
+    const firstPlan = planSourceFingerprints(fileSha, [], imported);
+    const repeatedPlan = planSourceFingerprints(fileSha, [], imported);
+
+    expect(firstPlan[0]).toEqual({ year: 2010, sourceFingerprint: `${fileSha.slice(0, 50)}:2010:22`, collision: false });
+    expect(firstPlan[1]).toEqual({ year: 2010, sourceFingerprint: `${fileSha.slice(0, 50)}:2010:22:mentiq`, collision: true });
+    expect(repeatedPlan).toEqual(firstPlan);
+  });
+
+  it("uses :dup2 and later suffixes for additional collisions", () => {
+    const plan = planSourceFingerprints(fileSha, [], [
+      { examYear: 2010, questionNumber: 22, subjectSlug: "informatika" },
+      { examYear: 2010, questionNumber: 22, subjectSlug: "mentiq" },
+      { examYear: 2010, questionNumber: 22, subjectSlug: "informatika" },
+      { examYear: 2010, questionNumber: 22, subjectSlug: "mentiq" },
+    ]);
+
+    expect(plan.map(item => item.sourceFingerprint)).toEqual([
+      `${fileSha.slice(0, 50)}:2010:22`,
+      `${fileSha.slice(0, 50)}:2010:22:mentiq`,
+      `${fileSha.slice(0, 50)}:2010:22:dup2`,
+      `${fileSha.slice(0, 50)}:2010:22:dup3`,
+    ]);
+    expect(plan.slice(1).every(item => item.collision)).toBe(true);
   });
 });

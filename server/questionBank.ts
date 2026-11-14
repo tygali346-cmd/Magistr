@@ -129,6 +129,23 @@ export function inferYears(filename: string) {
   return [...new Set([...filename.matchAll(/(?<!\d)(?:19|20)\d{2}(?!\d)/g)].map(match => Number(match[0])))].filter(year => year >= 1900 && year <= 2100).slice(0, 10);
 }
 
+export function planSourceFingerprints(fileSha: string, fileYears: number[], imported: Pick<ImportQuestion, "examYear" | "questionNumber" | "subjectSlug">[]) {
+  const occurrences = new Map<string, number>();
+  return imported.map((item, index) => {
+    const year = fileYears.length === 1 ? fileYears[0] : item.examYear;
+    const base = `${fileSha.slice(0, 50)}:${year ?? "na"}:${item.questionNumber ?? `x${index + 1}`}`.slice(0, 96);
+    const occurrence = occurrences.get(base) ?? 0;
+    occurrences.set(base, occurrence + 1);
+    if (occurrence === 0) return { year, sourceFingerprint: base, collision: false };
+    const suffix = occurrence === 1 ? item.subjectSlug || "unknown" : `dup${occurrence}`;
+    return {
+      year,
+      sourceFingerprint: `${base.slice(0, 96 - suffix.length - 1)}:${suffix}`,
+      collision: true,
+    };
+  });
+}
+
 export function completenessWarnings(completeness: ExtractionResult["completeness"]) {
   const warnings: string[] = [];
   if (!completeness.likelyComplete) {
@@ -257,6 +274,7 @@ async function persistExtractedQuestions(examFileId: number, fileSha: string, fi
   const db = await requireDatabase();
   let inserted = 0;
   let needsReview = 0;
+  const fingerprints = planSourceFingerprints(fileSha, fileYears, imported);
   for (const [index, item] of imported.entries()) {
     const subjectSlug = item.subjectSlug as SubjectSlug | null;
     const subject = subjectSlug ? await getSubjectBySlug(subjectSlug) : null;
@@ -264,12 +282,11 @@ async function persistExtractedQuestions(examFileId: number, fileSha: string, fi
     const mainTopic = resolvedTopic.primarySlug ? await getTopicBySlug(resolvedTopic.primarySlug) : null;
     const subtopic = resolvedTopic.subtopicSlug ? await getTopicBySlug(resolvedTopic.subtopicSlug) : null;
     const yearMismatch = item.examYear !== null && fileYears.length > 0 && !fileYears.includes(item.examYear);
-    const year = fileYears.length === 1 ? fileYears[0] : item.examYear;
+    const { year, sourceFingerprint, collision } = fingerprints[index];
     const itemWarnings = [...extractionWarnings, ...(yearMismatch ? [`AI tərəfindən təyin edilən ${item.examYear} ili PDF üçün verilmiş il göstəricisinə (${fileYears.join(", ")}) uyğun gəlmir.`] : [])];
     const questionText = item.questionText.trim();
     const options = item.options.map(option => ({ label: option.label.trim(), text: option.text.trim() })).filter(option => option.label && option.text);
     const contentFingerprint = sha256([questionText, ...options.map(option => `${option.label}:${option.text}`)].map(normalize).join("\n") || `empty-${fileSha}-${index}`);
-    const sourceFingerprint = `${fileSha.slice(0, 50)}:${year ?? "na"}:${item.questionNumber ?? `x${index + 1}`}`.slice(0, 96);
     const [sameSource] = await db.select({ id: questions.id }).from(questions).where(eq(questions.sourceFingerprint, sourceFingerprint)).limit(1);
     if (sameSource) {
       if (itemWarnings.length) {
@@ -291,6 +308,7 @@ async function persistExtractedQuestions(examFileId: number, fileSha: string, fi
       !options.length ? "Cavab variantı yoxdur." : "",
       sameContent ? `Mümkün təkrar: ${sameContent.id}` : "",
       item.subtopicNumber && !subtopic ? "Alt mövzu kataloqda tapılmadı." : "",
+      collision ? "il/nömrə toqquşması" : "",
     ].filter(Boolean);
     const uncertain = reviewReasons.length > 0;
     const reviewNote = reviewReasons.join(" · ").slice(0, 2000) || null;
