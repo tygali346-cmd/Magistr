@@ -27,14 +27,31 @@ export default function QuestionCard({ question, compact = false }: Props) {
       )}
       {question.options.length > 0 && (
         <div className="question-options">
-          {question.options.map(option => (
-            <div className="option-line" key={option.id}>
-              <span className="option-line-label">{option.label}</span><span>{option.optionText}</span>
-            </div>
-          ))}
+          {question.options.map(option => {
+            const optionMedia = question.media?.find(m => m.role === "option" && m.optionLabel === option.label);
+            return (
+              <div className="option-line" key={option.id}>
+                <span className="option-line-label">{option.label}</span>
+                <div style={{ flex: 1 }}>
+                  <span>{option.optionText}</span>
+                  {optionMedia && (
+                    <div style={{ marginTop: 6 }}>
+                      <img
+                        src={optionMedia.value}
+                        alt={`Sual ${question.questionNumber ?? ""} variant ${option.label} şəkli`}
+                        loading="lazy"
+                        style={{ maxWidth: "100%", maxHeight: 200, borderRadius: 6, cursor: "zoom-in" }}
+                        onClick={() => window.open(optionMedia.value, "_blank")}
+                      />
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
-      {question.media?.map((media, index) => <QuestionMediaBlock media={media} key={`${media.kind}-${index}`} />)}
+      {question.media?.map((media, index) => <QuestionMediaBlock media={media} questionNumber={question.questionNumber} key={`${media.kind}-${index}`} />)}
       {!compact && question.reviewNote && <p className="review-status-note">{question.reviewNote}</p>}
       <div className="question-source">
         <span>{question.sourceTitle || question.sourceFilename || "Mənbə göstərilməyib"}</span>

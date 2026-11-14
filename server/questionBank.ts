@@ -11,8 +11,8 @@ import { storageGetObject, storagePut } from "./storage";
 import { hasExactQuestionSet } from "./practiceSessionLogic";
 import { getDb } from "./db";
 import { memoryStore } from "./memoryStore";
-import { deleteFirestoreDoc } from "./firestoreRest";
-import { syncAllToFirestore, syncExamFileToFirestore, syncQuestionToFirestore } from "./firestoreSync";
+import { renderAndCropPdfFigure } from "./pdfProcessor";
+import { buildExamFileWrite, buildQuestionWrite, syncAllToFirestore, syncExamFileToFirestore, syncQuestionToFirestore } from "./firestoreSync";
 import {
   ensureTopicCatalog,
   getDashboardData,
@@ -46,6 +46,23 @@ function highConfidenceReviewCondition() {
   )!;
 }
 
+const bboxSchema = z.object({
+  x: z.number().min(0).max(1),
+  y: z.number().min(0).max(1),
+  w: z.number().min(0).max(1),
+  h: z.number().min(0).max(1),
+}).strict().nullable();
+
+const figureSchema = z.object({
+  page: z.number().int().positive().nullable(),
+  bbox: bboxSchema,
+  role: z.enum(["question", "option"]),
+  optionLabel: z.string().nullable(),
+  label: z.string().nullable(),
+  kind: z.enum(["image", "table", "formula", "diagram", "note"]),
+  value: z.string().optional().default(""),
+}).strict();
+
 const importQuestionSchema = z.object({
   examYear: z.number().int().min(1900).max(2100).nullable(),
   questionNumber: z.number().int().positive().nullable(),
@@ -59,12 +76,14 @@ const importQuestionSchema = z.object({
   confidence: z.number().min(0).max(1),
   classificationReason: z.string(),
   reviewNote: z.string(),
+  hasFigure: z.boolean().default(false),
+  figures: z.array(figureSchema).max(10).optional().default([]),
   media: z.array(z.object({
     kind: z.enum(["image", "table", "formula", "diagram", "note"]),
     label: z.string().nullable(),
     value: z.string(),
     sourcePage: z.number().int().positive().nullable(),
-  }).strict()).max(20),
+  }).strict()).max(20).optional().default([]),
 }).strict();
 const completenessSchema = z.object({
   likelyComplete: z.boolean(),
@@ -77,6 +96,31 @@ type ExtractionResult = z.infer<typeof extractionResultSchema>;
 
 const nullableInteger = { type: ["integer", "null"] };
 const nullableString = { type: ["string", "null"] };
+const bboxJsonSchema = {
+  type: ["object", "null"],
+  properties: {
+    x: { type: "number" },
+    y: { type: "number" },
+    w: { type: "number" },
+    h: { type: "number" },
+  },
+  required: ["x", "y", "w", "h"],
+  additionalProperties: false,
+};
+const figureJsonSchema = {
+  type: "object",
+  properties: {
+    page: nullableInteger,
+    bbox: bboxJsonSchema,
+    role: { type: "string", enum: ["question", "option"] },
+    optionLabel: nullableString,
+    label: nullableString,
+    kind: { type: "string", enum: ["image", "table", "formula", "diagram", "note"] },
+    value: { type: "string" },
+  },
+  required: ["page", "bbox", "role", "optionLabel", "label", "kind", "value"],
+  additionalProperties: false,
+};
 const EXTRACTION_JSON_SCHEMA: Record<string, unknown> = {
   type: "object",
   properties: {
@@ -97,9 +141,11 @@ const EXTRACTION_JSON_SCHEMA: Record<string, unknown> = {
           confidence: { type: "number" },
           classificationReason: { type: "string" },
           reviewNote: { type: "string" },
+          hasFigure: { type: "boolean" },
+          figures: { type: "array", items: figureJsonSchema },
           media: { type: "array", items: { type: "object", properties: { kind: { type: "string", enum: ["image", "table", "formula", "diagram", "note"] }, label: nullableString, value: { type: "string" }, sourcePage: nullableInteger }, required: ["kind", "label", "value", "sourcePage"], additionalProperties: false } },
         },
-        required: ["examYear", "questionNumber", "subjectSlug", "topicNumber", "subtopicNumber", "questionText", "correctionSuggestion", "options", "sourcePage", "confidence", "classificationReason", "reviewNote", "media"],
+        required: ["examYear", "questionNumber", "subjectSlug", "topicNumber", "subtopicNumber", "questionText", "correctionSuggestion", "options", "sourcePage", "confidence", "classificationReason", "reviewNote", "hasFigure", "figures", "media"],
         additionalProperties: false,
       },
     },
@@ -243,7 +289,7 @@ async function extractQuestionsFromPdf(
     "Extract every multiple-choice entrance exam question from the attached PDF and classify it using only the fixed topic catalog.",
     "Preserve question and answer-choice wording exactly as printed. Never paraphrase, solve, or invent an answer key.",
     "Put any suspected OCR correction separately in correctionSuggestion; do not replace original questionText.",
-    "For a question with a table, formula, image, or diagram, include a concise media record and source page; if unclear, keep the question and explain the uncertainty.",
+    "For any question with a figure, graph, diagram, table, or option image, set hasFigure to true and populate figures with page, bbox (normalized x, y, w, h between 0 and 1 relative to the page), role ('question' | 'option'), optionLabel (if role=option), kind ('image', 'table', 'formula', 'diagram', 'note'), and label. Gemini does not solve the image, only locates its bounding box.",
     "Choose one primary subject/topic based on the knowledge being tested, not keywords alone. Use null if uncertain. Never invent topics or subtopics.",
     "Read every page. After drafting the questions, audit page coverage and question numbering. If any page, question, numbering range, or complete set is uncertain, set completeness.likelyComplete to false and explain it; report suspected omitted question numbers when possible.",
     "If year or number cannot be read, use null. Keep all real questions in source order, and do not return instructions, model-exam sections, or answer keys as questions.",
@@ -307,6 +353,7 @@ async function persistExtractedQuestions(
   imported: ImportQuestion[],
   extractionWarnings: string[],
   onItemProcessed?: (stats: PersistProgressStats) => void | Promise<void>,
+  pdfBytes?: Buffer,
 ) {
   const db = await getDb();
   let inserted = 0;
@@ -326,6 +373,54 @@ async function persistExtractedQuestions(
     const questionText = item.questionText.trim();
     const options = item.options.map(option => ({ label: option.label.trim(), text: option.text.trim() })).filter(option => option.label && option.text);
     const contentFingerprint = sha256([questionText, ...options.map(option => `${option.label}:${option.text}`)].map(normalize).join("\n") || `empty-${fileSha}-${index}`);
+
+    const figList = [
+      ...(item.figures || []),
+      ...(item.media || []).map(m => ({ ...m, bbox: null, role: "question" as const, optionLabel: null }))
+    ];
+    const mediaEntries: QuestionMedia[] = [];
+    for (const [figIndex, entry] of figList.entries()) {
+      let mediaVal = entry.value || "";
+      let storageKey: string | undefined = (entry as any).storageKey;
+      let needsReviewFlag = false;
+      let reviewNoteAdd = "";
+
+      if (pdfBytes && (entry.kind === "image" || entry.kind === "diagram" || entry.kind === "table" || (entry as any).bbox)) {
+        try {
+          const cropped = await renderAndCropPdfFigure(
+            pdfBytes,
+            (entry as any).page ?? item.sourcePage ?? 1,
+            (entry as any).bbox ?? null,
+            fileSha,
+            index * 20 + figIndex,
+            storagePut
+          );
+          mediaVal = cropped.url;
+          storageKey = cropped.storageKey;
+          if (cropped.needsReview) {
+            needsReviewFlag = true;
+            reviewNoteAdd = cropped.reviewNote ?? "şəkil kəsimi yoxlanmalıdır";
+          }
+        } catch (err) {
+          needsReviewFlag = true;
+          reviewNoteAdd = "şəkil kəsimi zamanı xəta baş verdi";
+        }
+      }
+
+      mediaEntries.push({
+        kind: entry.kind,
+        ...(entry.label ? { label: entry.label } : {}),
+        value: mediaVal,
+        ...(storageKey ? { storageKey } : {}),
+        ...((entry as any).page ?? item.sourcePage ? { sourcePage: (entry as any).page ?? item.sourcePage! } : {}),
+        ...((entry as any).bbox ? { bbox: (entry as any).bbox } : {}),
+        ...((entry as any).role ? { role: (entry as any).role } : {}),
+        ...((entry as any).optionLabel ? { optionLabel: (entry as any).optionLabel } : {}),
+      });
+      if (needsReviewFlag && reviewNoteAdd) {
+        itemWarnings.push(reviewNoteAdd);
+      }
+    }
 
     if (!db) {
       if (memoryStore.questions.some(q => q.sourceFingerprint === sourceFingerprint)) {
@@ -350,7 +445,7 @@ async function persistExtractedQuestions(
       ].filter(Boolean);
       const uncertain = reviewReasons.length > 0;
       const reviewNote = reviewReasons.join(" · ").slice(0, 2000) || null;
-      const media: QuestionMedia[] = item.media.map(entry => ({ kind: entry.kind, ...(entry.label ? { label: entry.label } : {}), value: entry.value, ...(entry.sourcePage ? { sourcePage: entry.sourcePage } : {}) }));
+      const media = mediaEntries;
       const labels = new Set<string>();
       const finalOptions = options.map((option, optionIndex) => {
         let label = option.label;
@@ -416,7 +511,7 @@ async function persistExtractedQuestions(
     ].filter(Boolean);
     const uncertain = reviewReasons.length > 0;
     const reviewNote = reviewReasons.join(" · ").slice(0, 2000) || null;
-    const media: QuestionMedia[] = item.media.map(entry => ({ kind: entry.kind, ...(entry.label ? { label: entry.label } : {}), value: entry.value, ...(entry.sourcePage ? { sourcePage: entry.sourcePage } : {}) }));
+    const media = mediaEntries;
     const labels = new Set<string>();
     const finalOptions = options.map((option, optionIndex) => {
       let label = option.label;
@@ -676,6 +771,7 @@ async function runImport(
         });
         await syncJobProgress(pct, msg, stats.total, stats.processed === stats.total);
       },
+      pdfBytes,
     );
 
     let totalQuestions = 0;
@@ -704,18 +800,41 @@ async function runImport(
         skippedDuplicateCount: result.skippedDuplicates,
         needsReviewCount: needsReview,
       });
-      await syncExamFileToFirestore(examFileId, cloudSyncContext.firebaseIdToken);
-      for (let i = 0; i < fileQuestions.length; i += 1) {
-        await syncQuestionToFirestore(fileQuestions[i].id, cloudSyncContext.firebaseIdToken, cloudSyncContext.userOpenId);
-        if ((i + 1) % 5 === 0 || i + 1 === fileQuestions.length) {
-          setLiveImportProgress(examFileId, {
-            stage: "syncing_cloud",
-            status: "processing",
-            progress: 96 + Math.round(((i + 1) / Math.max(1, fileQuestions.length)) * 3),
-            message: `Firestore bulud bazasına yazılır: ${i + 1} / ${fileQuestions.length} sual…`,
+      const batchWrites: Array<{ docPath: string; fields: Record<string, unknown> }> = [];
+      const examFileWrite = buildExamFileWrite(examFileId);
+      if (examFileWrite) batchWrites.push(examFileWrite);
+
+      for (const q of fileQuestions) {
+        const qw = buildQuestionWrite(q.id);
+        if (qw) batchWrites.push(qw);
+        if (q.correctOption && q.correctAnswerSource) {
+          batchWrites.push({
+            docPath: `questionAnswers/${q.id}`,
+            fields: {
+              questionId: q.id,
+              correctOption: q.correctOption.slice(0, 8),
+              correctAnswerSource: q.correctAnswerSource.slice(0, 1000),
+              updatedBy: cloudSyncContext.userOpenId,
+            },
           });
         }
       }
+
+      if (batchWrites.length > 0) {
+        await commitFirestoreBatch(batchWrites, cloudSyncContext.firebaseIdToken);
+      }
+
+      setLiveImportProgress(examFileId, {
+        stage: "syncing_cloud",
+        status: "processing",
+        progress: 99,
+        message: "Firestore bulud sinxronizasiyası tamamlandı.",
+        detectedQuestionCount: extracted.length,
+        processedQuestionCount: extracted.length,
+        insertedCount: result.inserted,
+        skippedDuplicateCount: result.skippedDuplicates,
+        needsReviewCount: needsReview,
+      });
     }
 
     const state = needsReview ? "needs_review" : "completed";
@@ -994,6 +1113,7 @@ export const questionBankRouter = router({
       const deletedIds = new Set(memoryStore.questions.filter(q => q.examFileId === file.id).map(q => q.id));
       memoryStore.questions = memoryStore.questions.filter(q => q.examFileId !== file.id);
       memoryStore.questionOptions = memoryStore.questionOptions.filter(o => !deletedIds.has(o.questionId));
+      memoryStore.importJobs = memoryStore.importJobs.filter(j => j.examFileId !== file.id);
       memoryStore.examFiles = memoryStore.examFiles.filter(f => f.id !== file.id);
       memoryStore.saveSnapshot();
       if (ctx.firebaseIdToken) {
@@ -1011,10 +1131,25 @@ export const questionBankRouter = router({
       if (file.mimeType !== "application/pdf" || file.sourceUrl.startsWith("manual://")) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Əl ilə əlavə edilmiş sualların mənbəyi silinə bilməz." });
       }
-      const [result] = await tx.select({ value: count() }).from(questions).where(eq(questions.examFileId, file.id));
-      const deletedQuestionCount = result?.value ?? 0;
+      const matchingQuestions = await tx.select({ id: questions.id }).from(questions).where(eq(questions.examFileId, file.id));
+      const deletedIds = matchingQuestions.map(q => q.id);
+      const deletedQuestionCount = deletedIds.length;
+
+      if (deletedIds.length > 0) {
+        await tx.delete(questionOptions).where(inArray(questionOptions.questionId, deletedIds));
+      }
       await tx.delete(questions).where(eq(questions.examFileId, file.id));
+      await tx.delete(importJobs).where(eq(importJobs.examFileId, file.id));
       await tx.delete(examFiles).where(eq(examFiles.id, file.id));
+
+      if (ctx.firebaseIdToken) {
+        await deleteFirestoreDoc(`examFiles/${file.id}`, ctx.firebaseIdToken);
+        for (const qId of deletedIds) {
+          await deleteFirestoreDoc(`questions/${qId}`, ctx.firebaseIdToken);
+          await deleteFirestoreDoc(`questionAnswers/${qId}`, ctx.firebaseIdToken);
+        }
+      }
+
       return { deletedQuestionCount };
     });
   }),

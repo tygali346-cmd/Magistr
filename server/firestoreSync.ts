@@ -41,7 +41,7 @@ function buildCatalogWrites() {
   return writes;
 }
 
-function buildExamFileWrite(examFileId: number) {
+export function buildExamFileWrite(examFileId: number) {
   const file = memoryStore.getExamFileById(examFileId);
   if (!file) return null;
   return {
@@ -61,7 +61,7 @@ function buildExamFileWrite(examFileId: number) {
   };
 }
 
-function buildQuestionWrite(questionId: number) {
+export function buildQuestionWrite(questionId: number) {
   const q = memoryStore.questions.find(item => item.id === questionId);
   if (!q) return null;
   const subject = q.subjectId ? memoryStore.subjects.find(s => s.id === q.subjectId) : undefined;

@@ -140,11 +140,29 @@ export default function PracticePage() {
           <section className="card quiz-card">
             <div className="quiz-question-top"><h2>{current.examYear ?? "İl göstərilməyib"} · Sual {current.questionNumber ?? "—"}</h2><span className="tag">Nəticə testi bitirdikdən sonra göstəriləcək</span></div>
             <p className="quiz-question">{current.originalText}</p>
-            {current.media?.map((media, index) => <QuestionMediaBlock media={media} key={`${media.kind}-${index}`} />)}
+            {current.media?.map((media, index) => <QuestionMediaBlock media={media} questionNumber={current.questionNumber} key={`${media.kind}-${index}`} />)}
             <div className="quiz-options">
-              {current.options.map(option => <button type="button" key={option.id} className={`quiz-option${answers[current.id] === option.label ? " selected" : ""}`} onClick={() => setAnswers(previous => ({ ...previous, [current.id]: option.label }))} aria-pressed={answers[current.id] === option.label}>
-                <span className="quiz-option-mark">{option.label}</span><span>{option.optionText}</span>
-              </button>)}
+              {current.options.map(option => {
+                const optionMedia = current.media?.find(m => m.role === "option" && m.optionLabel === option.label);
+                return (
+                  <button type="button" key={option.id} className={`quiz-option${answers[current.id] === option.label ? " selected" : ""}`} onClick={() => setAnswers(previous => ({ ...previous, [current.id]: option.label }))} aria-pressed={answers[current.id] === option.label}>
+                    <span className="quiz-option-mark">{option.label}</span>
+                    <div style={{ flex: 1, textAlign: "left" }}>
+                      <span>{option.optionText}</span>
+                      {optionMedia && (
+                        <div style={{ marginTop: 6 }}>
+                          <img
+                            src={optionMedia.value}
+                            alt={`Sual ${current.questionNumber ?? ""} variant ${option.label} şəkli`}
+                            loading="lazy"
+                            style={{ maxWidth: "100%", maxHeight: 180, borderRadius: 6 }}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  </button>
+                );
+              })}
             </div>
             <div className="quiz-footer"><span className="caption">Mənbə: {current.sourceTitle || current.sourceFilename} · səh. {current.sourcePage ?? "—"}</span><span className="quiz-footer-actions">
               <button className="btn btn-secondary" disabled={step === 0} onClick={() => setStep(value => Math.max(0, value - 1))}>Əvvəlki</button>

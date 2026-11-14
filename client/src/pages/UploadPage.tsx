@@ -42,6 +42,7 @@ export default function UploadPage() {
   const [yearsText, setYearsText] = useState("");
   const [dragging, setDragging] = useState(false);
   const [working, setWorking] = useState(false);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [retryingIds, setRetryingIds] = useState<number[]>([]);
   const [retryStartedAt, setRetryStartedAt] = useState<Record<number, number>>({});
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -206,14 +207,13 @@ export default function UploadPage() {
     }
   }
 
-  async function deleteFile(examFileId: number, questionCount: number) {
-    const confirmed = window.confirm(`PDF mənbəyi və ona aid ${questionCount} sual silinəcək. Yalnız bazadakı qeydlər silinəcək; storage-dakı PDF faylı saxlanacaq. Davam edilsin?`);
-    if (!confirmed) return;
+  async function deleteFile(examFileId: number) {
     setUploadError("");
     setArchiveNotice("");
     try {
       const result = await deleteMutation.mutateAsync({ examFileId });
-      setArchiveNotice(`${result.deletedQuestionCount} sual və PDF mənbəyi silindi. Storage faylı saxlanıldı.`);
+      setArchiveNotice(`${result.deletedQuestionCount} sual və PDF mənbəyi silindi.`);
+      setConfirmDeleteId(null);
       await Promise.all([
         examsQuery.refetch(),
         utils.questionBank.dashboard.invalidate(),
@@ -327,7 +327,23 @@ export default function UploadPage() {
                       <RotateCcw size={12} className={isRetryingThis ? "animate-spin" : undefined} /> {isRetryingThis ? "Emal olunur…" : "Yenidən emal et"}
                     </button>
                   )}
-                  {file.mimeType === "application/pdf" && <button className="btn btn-secondary" disabled={deleteMutation.isPending || isRetryingThis} onClick={() => void deleteFile(file.id, file.questionCount)}><X size={12} /> {deleteMutation.isPending ? "Silinir…" : "Faylı sil"}</button>}
+                  {file.mimeType === "application/pdf" && (
+                    confirmDeleteId === file.id ? (
+                      <span style={{ display: "inline-flex", gap: 5, alignItems: "center" }}>
+                        <span className="caption" style={{ color: "#a33e37", fontWeight: 700 }}>Silinsin?</span>
+                        <button className="btn btn-danger" style={{ minHeight: 28, padding: "0 8px", fontSize: 10 }} disabled={deleteMutation.isPending} onClick={() => void deleteFile(file.id)}>
+                          {deleteMutation.isPending ? "Silinir…" : "Bəli"}
+                        </button>
+                        <button className="btn btn-secondary" style={{ minHeight: 28, padding: "0 8px", fontSize: 10 }} disabled={deleteMutation.isPending} onClick={() => setConfirmDeleteId(null)}>
+                          Xeyr
+                        </button>
+                      </span>
+                    ) : (
+                      <button className="btn btn-secondary" disabled={deleteMutation.isPending || isRetryingThis} onClick={() => setConfirmDeleteId(file.id)}>
+                        <X size={12} /> Faylı sil
+                      </button>
+                    )
+                  )}
                 </div>
                 {isActive && (
                   <ImportProgressPanel
