@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { FileText, Filter, Save, ShieldCheck } from "lucide-react";
+import { CheckCheck, FileText, Filter, Save, ShieldCheck } from "lucide-react";
 import { useLocation } from "wouter";
 import AppShell from "@/components/AppShell";
 import ExpandableText from "@/components/ExpandableText";
@@ -24,15 +24,47 @@ export default function ReviewPage() {
     return rows;
   }, [queueQuery.data, selectedId]);
   const [search, setSearch] = useState("");
+  const [bulkMessage, setBulkMessage] = useState("");
   const filtered = queue.filter(question => !search || `${question.originalText} ${question.examYear} ${question.questionNumber}`.toLocaleLowerCase("az").includes(search.toLocaleLowerCase("az")));
   const utils = trpc.useUtils();
   const saveMutation = trpc.questionBank.saveReview.useMutation({ onSuccess: async () => { await Promise.all([utils.questionBank.reviewQueue.invalidate(), utils.questionBank.dashboard.invalidate(), utils.questionBank.questions.invalidate(), utils.questionBank.question.invalidate()]); } });
+  const highConfidenceCountQuery = trpc.questionBank.highConfidenceReviewCount.useQuery();
+  const bulkApproveMutation = trpc.questionBank.approveHighConfidenceReview.useMutation({
+    onSuccess: async result => {
+      setBulkMessage(`${result.approved} sual “Yoxlanılıb” kimi işarələndi. Cavab açarları və sual mətnləri dəyişdirilmədi.`);
+      await Promise.all([utils.questionBank.reviewQueue.invalidate(), utils.questionBank.highConfidenceReviewCount.invalidate(), utils.questionBank.dashboard.invalidate(), utils.questionBank.questions.invalidate()]);
+    },
+    onError: async error => {
+      setBulkMessage(errorMessage(error));
+      await highConfidenceCountQuery.refetch();
+    },
+  });
+
+  function approveHighConfidenceQuestions() {
+    const expectedCount = highConfidenceCountQuery.data ?? 0;
+    if (expectedCount < 1 || bulkApproveMutation.isPending) return;
+    const confirmed = window.confirm(`${expectedCount} sualın mövzu təsnifatı ən azı 95% əmindir. Onları “Yoxlanılıb” kimi qeyd edək? Bu əməliyyat sual mətnini və cavab açarını dəyişməyəcək.`);
+    if (!confirmed) return;
+    setBulkMessage("");
+    bulkApproveMutation.mutate({ expectedCount });
+  }
 
   useEffect(() => { if (selectedId) document.getElementById(`review-${selectedId}`)?.scrollIntoView({ behavior: "smooth", block: "center" }); }, [selectedId, queue.length, location]);
 
   return (
     <AppShell title="Yoxlanış siyahısı" eyebrow="MƏNBƏ MÜQAYİSƏSİ · MÖVZU TƏSDİQİ">
       <div className="subject-intro"><div><strong>Qeyri-müəyyən suallar itmir</strong><p>Mətni, OCR təklifini və mövzu təyinatını orijinal PDF-lə müqayisə edin. Etibarlı cavab açarı yalnız mənbəsi göstərildikdə saxlanır.</p></div><span className="tag warning">{queue.length} sual</span></div>
+      <section className="review-bulk-approve" aria-label="95 faiz və daha yüksək əminlikli sualları toplu təsdiq et">
+        <div className="review-bulk-copy">
+          <strong>Yüksək əminlikli təsnifat</strong>
+          <p>Yalnız yoxlanışda olan və fənn/mövzusu seçilmiş suallardan əminliyi 95% və yuxarı olanları “Yoxlanılıb” kimi işarələyir. Cavab açarı və sualın mətni dəyişmir.</p>
+          <span className="caption" role="status">{highConfidenceCountQuery.isLoading ? "Uyğun suallar sayılır…" : highConfidenceCountQuery.isError ? "Say hesablana bilmədi — yenidən yükləyin." : `${highConfidenceCountQuery.data ?? 0} uyğun sual`}</span>
+        </div>
+        <button className="btn btn-primary" onClick={approveHighConfidenceQuestions} disabled={highConfidenceCountQuery.isLoading || highConfidenceCountQuery.isError || !highConfidenceCountQuery.data || bulkApproveMutation.isPending}>
+          <CheckCheck size={15} /> {bulkApproveMutation.isPending ? "Təsdiqlənir…" : `95%+ sualları təsdiqlə (${highConfidenceCountQuery.data ?? 0})`}
+        </button>
+        {bulkMessage && <p className="review-bulk-message" role="status">{bulkMessage}</p>}
+      </section>
       <section className="filter-panel"><div className="filter-field wide"><label htmlFor="review-search">Axtar</label><input id="review-search" className="field" placeholder="Mətn, il və ya sual nömrəsi" value={search} onChange={event => setSearch(event.target.value)} /></div><span className="caption"><Filter size={13} style={{ display: "inline", verticalAlign: "-3px" }} /> İdxal zamanı əminlik aşağı olduqda sual bura düşür.</span></section>
       {(queueQuery.isLoading || subjectsQuery.isLoading || inforQuery.isLoading || logicQuery.isLoading) && <div className="loading-state">Yoxlanış qeydləri yüklənir…</div>}
       {(queueQuery.isError || subjectsQuery.isError || inforQuery.isError || logicQuery.isError) && <div className="error-box">{errorMessage(queueQuery.error ?? subjectsQuery.error ?? inforQuery.error ?? logicQuery.error)} <button className="btn btn-secondary" onClick={() => { void queueQuery.refetch(); void subjectsQuery.refetch(); void inforQuery.refetch(); void logicQuery.refetch(); }}>Yenidən yoxla</button></div>}

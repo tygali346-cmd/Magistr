@@ -29,4 +29,15 @@ describe("admin authorization", () => {
       code: "FORBIDDEN",
     });
   });
+
+  it("protects the high-confidence count and bulk approval endpoints", async () => {
+    const caller = appRouter.createCaller(staleAdminContext);
+
+    await expect(caller.questionBank.highConfidenceReviewCount()).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    await expect(caller.questionBank.approveHighConfidenceReview({ expectedCount: 1 })).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+  });
 });

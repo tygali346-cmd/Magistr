@@ -167,3 +167,12 @@
 - [x] Gemini-yə yüklənmiş müvəqqəti PDF emaldan sonra silinməlidir; Gemini açarı və ya admin identifikatoru yoxdursa, emal və idarəetmə əməliyyatları uğursuz şəkildə açıq yox, bağlı qalmalıdır.
 - [x] Protected Preview-də `/uploads` giriş ekranı və icazəsiz PDF upload üçün HTTP 401 yoxlanıldı; admin identity matcher və tRPC admin proseduru regression test-ləri keçdi.
 - [ ] İlk admin Manus sessiyası ilə giriş edib, nümunə PDF-i Gemini-də emal etdir və nəticəni yoxlanış növbəsində təsdiqlə. Bu yoxlamada authenticated admin sessiyası olmadığı üçün real PDF Google-a göndərilmədi.
+
+## 14. Yüksək əminlikli sualların toplu təsdiqi
+
+- [x] Yoxlanış səhifəsində admin, ən azı 95% mövzu təsnifatı əminliyi olan gözləyən sualların sayını görə bilməlidir.
+- [x] Bir düymə ilə yalnız `needs_review` statusunda, təsnifat confidence-i `0.95` və yuxarı, fənni və əsas mövzusu təyin edilmiş suallar `checked` kimi işarələnməlidir.
+- [x] Toplu təsdiqləmə sualın mətnini, mövzu təyinatını və cavab açarını dəyişməməli; yalnız yoxlanış statusunu dəyişməlidir.
+- [x] Say serverdən hesablanmalı, əməliyyat admin identifikasiyası ilə qorunmalı və təsdiq zamanı say dəyişibsə köhnə say əsasında əməliyyat aparılmamalıdır.
+
+Yekun yoxlama: TypeScript yoxlaması, 22 regression testi və production build keçdi. Canlı admin sessiyası ilə düymənin vizual click-through testi aparılmadı.

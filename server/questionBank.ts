@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { and, count, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, count, desc, eq, gte, inArray, isNotNull, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { SUBJECT_CATALOG, TOPIC_CATALOG, type SubjectSlug } from "@shared/topicCatalog";
@@ -25,7 +25,17 @@ import {
 } from "./questionBankDb";
 
 const REVIEW_THRESHOLD = 0.75;
+const HIGH_CONFIDENCE_REVIEW_THRESHOLD = 0.95;
 const MAX_PDF_BYTES = 50 * 1024 * 1024;
+
+function highConfidenceReviewCondition() {
+  return and(
+    eq(questions.reviewStatus, "needs_review"),
+    gte(questions.classificationConfidence, HIGH_CONFIDENCE_REVIEW_THRESHOLD),
+    isNotNull(questions.subjectId),
+    isNotNull(questions.topicId),
+  )!;
+}
 
 const importQuestionSchema = z.object({
   examYear: z.number().int().min(1900).max(2100).nullable(),
@@ -377,6 +387,24 @@ export const questionBankRouter = router({
     return redactQuestionForPublic(question);
   }),
   reviewQueue: adminProcedure.query(async () => (await listQuestions({ needsReview: true, limit: 200, sort: "recent" })).map(redactQuestionForPublic)),
+  highConfidenceReviewCount: adminProcedure.query(async () => {
+    const db = await requireDatabase();
+    const [result] = await db.select({ value: count() }).from(questions).where(highConfidenceReviewCondition());
+    return result?.value ?? 0;
+  }),
+  approveHighConfidenceReview: adminProcedure.input(z.object({ expectedCount: z.number().int().positive() })).mutation(async ({ input }) => {
+    const db = await requireDatabase();
+    return db.transaction(async tx => {
+      const predicate = highConfidenceReviewCondition();
+      const [result] = await tx.select({ value: count() }).from(questions).where(predicate);
+      const currentCount = result?.value ?? 0;
+      if (currentCount !== input.expectedCount) {
+        throw new TRPCError({ code: "CONFLICT", message: "Yoxlanış siyahısı dəyişib. Sayı yeniləyib əməliyyatı təkrar başladın." });
+      }
+      await tx.update(questions).set({ reviewStatus: "checked" }).where(predicate);
+      return { approved: currentCount };
+    });
+  }),
   saveReview: adminProcedure.input(z.object({
     questionId: z.number().int().positive(), subjectId: z.number().int().positive().nullable(), topicId: z.number().int().positive().nullable(), subtopicId: z.number().int().positive().nullable(),
     correctedText: z.string().max(12000).nullable(), correctOption: z.string().max(8).nullable(), correctAnswerSource: z.string().max(1000).nullable(),
