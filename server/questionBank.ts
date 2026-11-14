@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { and, count, desc, eq, gte, inArray, isNotNull, sql } from "drizzle-orm";
+import { and, count, desc, eq, gte, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { SUBJECT_CATALOG, TOPIC_CATALOG, type SubjectSlug } from "@shared/topicCatalog";
@@ -34,6 +34,10 @@ function highConfidenceReviewCondition() {
     gte(questions.classificationConfidence, HIGH_CONFIDENCE_REVIEW_THRESHOLD),
     isNotNull(questions.subjectId),
     isNotNull(questions.topicId),
+    isNotNull(questions.examYear),
+    isNotNull(questions.questionNumber),
+    or(isNull(questions.reviewNote), sql`trim(${questions.reviewNote}) = ''`)!,
+    sql`exists (select 1 from ${questionOptions} where ${questionOptions.questionId} = ${questions.id})`,
   )!;
 }
 
@@ -275,8 +279,21 @@ async function persistExtractedQuestions(examFileId: number, fileSha: string, fi
       continue;
     }
     const [sameContent] = await db.select({ id: questions.id }).from(questions).where(eq(questions.contentFingerprint, contentFingerprint)).limit(1);
-    const uncertain = !questionText || !subject || !mainTopic || item.confidence < REVIEW_THRESHOLD || !year || !item.questionNumber || !options.length || !!item.reviewNote.trim() || !!sameContent || (!!item.subtopicNumber && !subtopic) || itemWarnings.length > 0;
-    const reviewNote = [item.reviewNote.trim(), ...itemWarnings, sameContent ? `Mümkün təkrar: ${sameContent.id}` : ""].filter(Boolean).join(" · ").slice(0, 2000) || null;
+    const reviewReasons = [
+      item.reviewNote.trim(),
+      ...itemWarnings,
+      !questionText ? "Sual mətni boşdur." : "",
+      !subject ? "Fənn müəyyən edilməyib." : "",
+      !mainTopic ? "Əsas mövzu müəyyən edilməyib." : "",
+      item.confidence < REVIEW_THRESHOLD ? "Təsnifat əminliyi aşağıdır." : "",
+      !year ? "İmtahan ili müəyyən edilməyib." : "",
+      !item.questionNumber ? "Sual nömrəsi müəyyən edilməyib." : "",
+      !options.length ? "Cavab variantı yoxdur." : "",
+      sameContent ? `Mümkün təkrar: ${sameContent.id}` : "",
+      item.subtopicNumber && !subtopic ? "Alt mövzu kataloqda tapılmadı." : "",
+    ].filter(Boolean);
+    const uncertain = reviewReasons.length > 0;
+    const reviewNote = reviewReasons.join(" · ").slice(0, 2000) || null;
     const media: QuestionMedia[] = item.media.map(entry => ({ kind: entry.kind, ...(entry.label ? { label: entry.label } : {}), value: entry.value, ...(entry.sourcePage ? { sourcePage: entry.sourcePage } : {}) }));
     const labels = new Set<string>();
     const finalOptions = options.map((option, optionIndex) => {

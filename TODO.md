@@ -170,9 +170,10 @@
 
 ## 14. Yüksək əminlikli sualların toplu təsdiqi
 
-- [x] Yoxlanış səhifəsində admin, ən azı 95% mövzu təsnifatı əminliyi olan gözləyən sualların sayını görə bilməlidir.
-- [x] Bir düymə ilə yalnız `needs_review` statusunda, təsnifat confidence-i `0.95` və yuxarı, fənni və əsas mövzusu təyin edilmiş suallar `checked` kimi işarələnməlidir.
+- [x] Yoxlanış səhifəsində admin yalnız `reviewNote`-u boş olan, ili/nömrəsi məlum, ən azı bir variantı, təyin edilmiş fənni və əsas mövzusu olan `needs_review` suallar içindən confidence-i `0.95` və yuxarı olanların sayını görə bilməlidir.
+- [x] Bir düymə ilə yalnız yuxarıdakı eyni şərtlərə uyğun suallar `checked` kimi işarələnməlidir; say və təsdiq query-ləri ortaq şərt işlətməlidir.
 - [x] Toplu təsdiqləmə sualın mətnini, mövzu təyinatını və cavab açarını dəyişməməli; yalnız yoxlanış statusunu dəyişməlidir.
 - [x] Say serverdən hesablanmalı, əməliyyat admin identifikasiyası ilə qorunmalı və təsdiq zamanı say dəyişibsə köhnə say əsasında əməliyyat aparılmamalıdır.
+- [x] `uncertain=true` olan yeni idxal sualında `reviewNote` boş qalmamalı; qeyddə yoxlanış səbəbi göstərilməlidir.
 
 Yekun yoxlama: TypeScript yoxlaması, 22 regression testi və production build keçdi. Canlı admin sessiyası ilə düymənin vizual click-through testi aparılmadı.
