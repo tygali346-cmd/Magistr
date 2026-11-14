@@ -40,4 +40,15 @@ describe("admin authorization", () => {
       code: "FORBIDDEN",
     });
   });
+
+  it("protects PDF retry and deletion endpoints", async () => {
+    const caller = appRouter.createCaller(staleAdminContext);
+
+    await expect(caller.questionBank.retryImport({ examFileId: 1 })).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    await expect(caller.questionBank.deleteExamFile({ examFileId: 1 })).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+  });
 });

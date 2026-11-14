@@ -288,13 +288,7 @@ async function persistExtractedQuestions(examFileId: number, fileSha: string, fi
     const options = item.options.map(option => ({ label: option.label.trim(), text: option.text.trim() })).filter(option => option.label && option.text);
     const contentFingerprint = sha256([questionText, ...options.map(option => `${option.label}:${option.text}`)].map(normalize).join("\n") || `empty-${fileSha}-${index}`);
     const [sameSource] = await db.select({ id: questions.id }).from(questions).where(eq(questions.sourceFingerprint, sourceFingerprint)).limit(1);
-    if (sameSource) {
-      if (itemWarnings.length) {
-        const [existing] = await db.select({ reviewNote: questions.reviewNote }).from(questions).where(eq(questions.id, sameSource.id)).limit(1);
-        await db.update(questions).set({ reviewStatus: "needs_review", reviewNote: [existing?.reviewNote, ...itemWarnings].filter(Boolean).join(" · ").slice(0, 2000) }).where(eq(questions.id, sameSource.id));
-      }
-      continue;
-    }
+    if (sameSource) continue;
     const [sameContent] = await db.select({ id: questions.id }).from(questions).where(eq(questions.contentFingerprint, contentFingerprint)).limit(1);
     const reviewReasons = [
       item.reviewNote.trim(),
@@ -476,8 +470,23 @@ export const questionBankRouter = router({
   retryImport: adminProcedure.input(z.object({ examFileId: z.number().int().positive() })).mutation(async ({ input }) => {
     const file = await getExamFileById(input.examFileId);
     if (!file) throw new TRPCError({ code: "NOT_FOUND", message: "PDF mənbəyi tapılmadı." });
-    if (file.processingStatus !== "failed" && file.processingStatus !== "uploaded") throw new TRPCError({ code: "CONFLICT", message: "Yalnız uğursuz və ya hələ işlənməmiş PDF yenidən emal edilə bilər." });
+    if (!["failed", "uploaded", "completed", "needs_review"].includes(file.processingStatus)) throw new TRPCError({ code: "CONFLICT", message: "Bu PDF hazırda emal olunur və yenidən başladılmış hesab edilmir." });
     return runImport(file.id);
+  }),
+  deleteExamFile: adminProcedure.input(z.object({ examFileId: z.number().int().positive() })).mutation(async ({ input }) => {
+    const db = await requireDatabase();
+    return db.transaction(async tx => {
+      const [file] = await tx.select({ id: examFiles.id, mimeType: examFiles.mimeType, sourceUrl: examFiles.sourceUrl }).from(examFiles).where(eq(examFiles.id, input.examFileId)).limit(1);
+      if (!file) throw new TRPCError({ code: "NOT_FOUND", message: "PDF mənbəyi tapılmadı." });
+      if (file.mimeType !== "application/pdf" || file.sourceUrl.startsWith("manual://")) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Əl ilə əlavə edilmiş sualların mənbəyi silinə bilməz." });
+      }
+      const [result] = await tx.select({ value: count() }).from(questions).where(eq(questions.examFileId, file.id));
+      const deletedQuestionCount = result?.value ?? 0;
+      await tx.delete(questions).where(eq(questions.examFileId, file.id));
+      await tx.delete(examFiles).where(eq(examFiles.id, file.id));
+      return { deletedQuestionCount };
+    });
   }),
   attempts: publicProcedure.input(z.object({ learnerKey: z.string().min(16).max(64), limit: z.number().int().min(1).max(100).optional() })).query(({ input }) => getLearnerAttempts(input.learnerKey, input.limit)),
   saveAttempt: publicProcedure.input(z.object({

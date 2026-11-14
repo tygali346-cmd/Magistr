@@ -59,7 +59,8 @@
 - [x] Sualın orijinal mətni dəyişdirilməməlidir. OCR zamanı yaranan səhvlər aşkarlanarsa, düzəliş təklif edilməli və orijinal mənbə ilə müqayisə imkanı saxlanmalıdır.
 - [x] Şəkildən asılı olan suallarda şəkil mütləq qorunmalıdır. Şəkil çıxarıla bilmirsə, həmin sual itirilməməli, yoxlanış üçün işarələnməlidir.
 - [x] Yükləmə interfeysi hər PDF üçün gözlənilən sual sayını istəyə bağlı qəbul edir; çıxarış sayı bu göstərici ilə uyğun gəlmirsə və ya AI tamlığı təsdiqləmirsə, nəticə yoxlanış üçün işarələnir.
-- [x] Sual çıxmayan fayl uğurlu kimi göstərilmir; uğursuz PDF arxivdən yenidən emal edilə bilər.
+- [x] Sual çıxmayan fayl uğurlu kimi göstərilmir; PDF `failed`, `uploaded`, `completed` və ya `needs_review` olduqda admin onu yenidən emal edə bilər. Təkrar emal mövcud sual qeydlərini dəyişmir, yalnız çatışmayanları əlavə edir.
+- [x] Admin imtahan PDF mənbəyini və yalnız həmin fayla aid sualları tranzaksiyada bazadan silə bilər; əl ilə əlavə edilmiş sualların mənbəsi qorunur və storage-dakı PDF obyekti silinmir.
 
 ## 3. AI təsnifatı, düzəliş və təkrarın qarşısının alınması
 
@@ -176,4 +177,4 @@
 - [x] Say serverdən hesablanmalı, əməliyyat admin identifikasiyası ilə qorunmalı və təsdiq zamanı say dəyişibsə köhnə say əsasında əməliyyat aparılmamalıdır.
 - [x] `uncertain=true` olan yeni idxal sualında `reviewNote` boş qalmamalı; qeyddə yoxlanış səbəbi göstərilməlidir.
 
-Yekun yoxlama: TypeScript yoxlaması, 22 regression testi və production build keçdi. Canlı admin sessiyası ilə düymənin vizual click-through testi aparılmadı.
+Yekun yoxlama: `pnpm check` keçdi; `pnpm test` — 7 faylda 34 test keçdi; `pnpm build` keçdi. Bu checkout-da DB bağlantısı və canlı admin sessiyası olmadığı üçün high-confidence sayının əvvəlki/sonrakı rəqəmləri oxunmadı; toplu təsdiq əməliyyatı başladılmadı.
