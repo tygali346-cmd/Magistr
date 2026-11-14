@@ -5,7 +5,7 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { SUBJECT_CATALOG, TOPIC_CATALOG, type SubjectSlug } from "@shared/topicCatalog";
 import { examFiles, importJobs, practiceSessions, questionOptions, questions, studyAttempts, subjects, topics, type AttemptAnswer, type QuestionMedia } from "../drizzle/schema";
-import { extractPdfWithGemini } from "./gemini";
+import { extractPdfWithGemini, type ExtractPdfProgressCallbacks } from "./gemini";
 import { adminProcedure, publicProcedure, router } from "./_core/trpc";
 import { storageGetObject, storagePut } from "./storage";
 import { hasExactQuestionSet } from "./practiceSessionLogic";
@@ -231,7 +231,13 @@ function parseModelJson(text: string) {
   }
 }
 
-async function extractQuestionsFromPdf(pdfBytes: Buffer, filename: string, years: number[], expectedQuestionCount: number | null) {
+async function extractQuestionsFromPdf(
+  pdfBytes: Buffer,
+  filename: string,
+  years: number[],
+  expectedQuestionCount: number | null,
+  callbacks?: ExtractPdfProgressCallbacks,
+) {
   const catalog = TOPIC_CATALOG.map(topic => ({ subject: topic.subjectSlug, number: topic.numberLabel, name: topic.name, parentNumber: topic.parentNumberLabel ?? null }));
   const system = [
     "Extract every multiple-choice entrance exam question from the attached PDF and classify it using only the fixed topic catalog.",
@@ -243,7 +249,7 @@ async function extractQuestionsFromPdf(pdfBytes: Buffer, filename: string, years
     "If year or number cannot be read, use null. Keep all real questions in source order, and do not return instructions, model-exam sections, or answer keys as questions.",
   ].join(" ");
   const user = [`Source filename: ${filename}`, `Year hints: ${years.length ? years.join(", ") : "none"}`, `Expected total question count: ${expectedQuestionCount ?? "not supplied"}`, `Exact allowed topic catalog: ${JSON.stringify(catalog)}`, "Pages may be selectable-text or scanned. Return every question plus the required completeness assessment in strict JSON."].join("\n");
-  const output = await extractPdfWithGemini(pdfBytes, filename, `${system}\n\n${user}`, EXTRACTION_JSON_SCHEMA);
+  const output = await extractPdfWithGemini(pdfBytes, filename, `${system}\n\n${user}`, EXTRACTION_JSON_SCHEMA, callbacks);
   if (!output) throw new Error("AI xidməti emal üçün cavab qaytarmadı.");
   const parsed = extractionResultSchema.safeParse(parseModelJson(output));
   if (!parsed.success) throw new Error("AI cavabı tələb olunan sual quruluşuna uyğun deyil.");
@@ -286,10 +292,27 @@ export function redactQuestionForPublic<T extends { correctOption: string | null
   return visible;
 }
 
-async function persistExtractedQuestions(examFileId: number, fileSha: string, fileYears: number[], imported: ImportQuestion[], extractionWarnings: string[]) {
+type PersistProgressStats = {
+  processed: number;
+  total: number;
+  inserted: number;
+  skippedDuplicates: number;
+  needsReview: number;
+};
+
+async function persistExtractedQuestions(
+  examFileId: number,
+  fileSha: string,
+  fileYears: number[],
+  imported: ImportQuestion[],
+  extractionWarnings: string[],
+  onItemProcessed?: (stats: PersistProgressStats) => void | Promise<void>,
+) {
   const db = await getDb();
   let inserted = 0;
+  let skippedDuplicates = 0;
   let needsReview = 0;
+  const total = imported.length;
   const fingerprints = planSourceFingerprints(fileSha, fileYears, imported);
   for (const [index, item] of imported.entries()) {
     const subjectSlug = item.subjectSlug as SubjectSlug | null;
@@ -305,7 +328,11 @@ async function persistExtractedQuestions(examFileId: number, fileSha: string, fi
     const contentFingerprint = sha256([questionText, ...options.map(option => `${option.label}:${option.text}`)].map(normalize).join("\n") || `empty-${fileSha}-${index}`);
 
     if (!db) {
-      if (memoryStore.questions.some(q => q.sourceFingerprint === sourceFingerprint)) continue;
+      if (memoryStore.questions.some(q => q.sourceFingerprint === sourceFingerprint)) {
+        skippedDuplicates += 1;
+        await onItemProcessed?.({ processed: index + 1, total, inserted, skippedDuplicates, needsReview });
+        continue;
+      }
       const sameContent = memoryStore.questions.find(q => q.contentFingerprint === contentFingerprint);
       const reviewReasons = [
         item.reviewNote.trim(),
@@ -362,11 +389,16 @@ async function persistExtractedQuestions(examFileId: number, fileSha: string, fi
       inserted += 1;
       if (uncertain) needsReview += 1;
       memoryStore.saveSnapshot();
+      await onItemProcessed?.({ processed: index + 1, total, inserted, skippedDuplicates, needsReview });
       continue;
     }
 
     const [sameSource] = await db.select({ id: questions.id }).from(questions).where(eq(questions.sourceFingerprint, sourceFingerprint)).limit(1);
-    if (sameSource) continue;
+    if (sameSource) {
+      skippedDuplicates += 1;
+      await onItemProcessed?.({ processed: index + 1, total, inserted, skippedDuplicates, needsReview });
+      continue;
+    }
     const [sameContent] = await db.select({ id: questions.id }).from(questions).where(eq(questions.contentFingerprint, contentFingerprint)).limit(1);
     const reviewReasons = [
       item.reviewNote.trim(),
@@ -419,15 +451,87 @@ async function persistExtractedQuestions(examFileId: number, fileSha: string, fi
     });
     inserted += 1;
     if (uncertain) needsReview += 1;
+    await onItemProcessed?.({ processed: index + 1, total, inserted, skippedDuplicates, needsReview });
   }
-  return { inserted, needsReview };
+  return { inserted, skippedDuplicates, needsReview };
 }
 
-async function runImport(examFileId: number) {
+export type LiveImportStage =
+  | "queued"
+  | "preparing_pdf"
+  | "uploading_to_ai"
+  | "extracting"
+  | "saving"
+  | "syncing_cloud"
+  | "completed"
+  | "needs_review"
+  | "failed";
+
+export type LiveImportProgress = {
+  examFileId: number;
+  jobId: number | null;
+  stage: LiveImportStage;
+  status: "queued" | "processing" | "completed" | "needs_review" | "failed";
+  progress: number;
+  message: string;
+  expectedQuestionCount: number | null;
+  detectedQuestionCount: number;
+  processedQuestionCount: number;
+  insertedCount: number;
+  skippedDuplicateCount: number;
+  needsReviewCount: number;
+  startedAt: string | null;
+  updatedAt: string;
+};
+
+const liveImportProgressMap = new Map<number, LiveImportProgress>();
+
+export function computeStreamProgress(
+  detectedQuestions: number,
+  expectedQuestionCount: number | null,
+  charsReceived: number,
+): number {
+  if (expectedQuestionCount && expectedQuestionCount > 0) {
+    return Math.min(72, 20 + Math.round((detectedQuestions / expectedQuestionCount) * 52));
+  }
+  if (detectedQuestions > 0) {
+    return Math.min(72, 22 + Math.round(50 * (1 - Math.exp(-detectedQuestions / 20))));
+  }
+  return Math.min(28, 18 + Math.floor(charsReceived / 2000));
+}
+
+function setLiveImportProgress(examFileId: number, patch: Partial<LiveImportProgress> & Pick<LiveImportProgress, "stage" | "status" | "progress" | "message">): LiveImportProgress {
+  const prev = liveImportProgressMap.get(examFileId);
+  const nowIso = new Date().toISOString();
+  const next: LiveImportProgress = {
+    examFileId,
+    jobId: patch.jobId ?? prev?.jobId ?? null,
+    stage: patch.stage,
+    status: patch.status,
+    progress: Math.max(0, Math.min(100, patch.progress)),
+    message: patch.message,
+    expectedQuestionCount: patch.expectedQuestionCount !== undefined ? patch.expectedQuestionCount : (prev?.expectedQuestionCount ?? null),
+    detectedQuestionCount: patch.detectedQuestionCount ?? prev?.detectedQuestionCount ?? 0,
+    processedQuestionCount: patch.processedQuestionCount ?? prev?.processedQuestionCount ?? 0,
+    insertedCount: patch.insertedCount ?? prev?.insertedCount ?? 0,
+    skippedDuplicateCount: patch.skippedDuplicateCount ?? prev?.skippedDuplicateCount ?? 0,
+    needsReviewCount: patch.needsReviewCount ?? prev?.needsReviewCount ?? 0,
+    startedAt: patch.startedAt !== undefined ? patch.startedAt : (prev?.startedAt ?? nowIso),
+    updatedAt: nowIso,
+  };
+  liveImportProgressMap.set(examFileId, next);
+  return next;
+}
+
+async function runImport(
+  examFileId: number,
+  cloudSyncContext?: { firebaseIdToken: string; userOpenId: string },
+) {
   const file = await getExamFileById(examFileId);
   if (!file) throw new TRPCError({ code: "NOT_FOUND", message: "PDF mənbəyi tapılmadı." });
   const db = await getDb();
   let jobId = 0;
+  const startedAtIso = new Date().toISOString();
   if (!db) {
     const now = new Date();
     jobId = memoryStore.nextIds.importJob++;
@@ -437,14 +541,51 @@ async function runImport(examFileId: number) {
     jobId = Number((insertResult as unknown as [{ insertId: number }])[0]?.insertId);
   }
   if (!jobId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "İdxal işi yaradıla bilmədi." });
-  try {
-    await updateExamFileState(examFileId, "processing");
+
+  setLiveImportProgress(examFileId, {
+    jobId,
+    stage: "preparing_pdf",
+    status: "processing",
+    progress: 5,
+    message: "PDF mənbədən oxunur və emal üçün hazırlanır…",
+    expectedQuestionCount: file.expectedQuestionCount ?? null,
+    detectedQuestionCount: 0,
+    processedQuestionCount: 0,
+    insertedCount: 0,
+    skippedDuplicateCount: 0,
+    needsReviewCount: 0,
+    startedAt: startedAtIso,
+  });
+
+  let lastDbSyncMs = 0;
+  let lastDbQuestionCount = -1;
+  const syncJobProgress = async (
+    progress: number,
+    message: string,
+    detectedQuestionCount: number,
+    forceDbWrite = false,
+  ) => {
     if (!db) {
       const job = memoryStore.importJobs.find(j => j.id === jobId);
-      if (job) { job.progress = 20; job.message = "PDF-dən suallar və mövzular çıxarılır."; job.updatedAt = new Date(); }
-    } else {
-      await db.update(importJobs).set({ progress: 20, message: "PDF-dən suallar və mövzular çıxarılır." }).where(eq(importJobs.id, jobId));
+      if (job) {
+        job.progress = progress;
+        job.message = message;
+        job.detectedQuestionCount = detectedQuestionCount;
+        job.updatedAt = new Date();
+      }
+      return;
     }
+    const now = Date.now();
+    if (!forceDbWrite && now - lastDbSyncMs < 1200 && detectedQuestionCount === lastDbQuestionCount) {
+      return;
+    }
+    lastDbSyncMs = now;
+    lastDbQuestionCount = detectedQuestionCount;
+    await db.update(importJobs).set({ progress, message, detectedQuestionCount }).where(eq(importJobs.id, jobId));
+  };
+
+  try {
+    await updateExamFileState(examFileId, "processing");
     const storedObject = await storageGetObject(file.storageKey);
     if (!storedObject) {
       throw new Error("Orijinal PDF saxlamada tapılmadı.");
@@ -453,7 +594,47 @@ async function runImport(examFileId: number) {
     if (pdfBytes.byteLength < 8 || pdfBytes.byteLength > MAX_PDF_BYTES || pdfBytes.subarray(0, 5).toString("ascii") !== "%PDF-") {
       throw new Error("Saxlanmış mənbə etibarlı PDF deyil və ya 50 MB limitini keçir.");
     }
-    const extraction = await extractQuestionsFromPdf(pdfBytes, file.filename, file.years ?? [], file.expectedQuestionCount);
+
+    const extraction = await extractQuestionsFromPdf(
+      pdfBytes,
+      file.filename,
+      file.years ?? [],
+      file.expectedQuestionCount,
+      {
+        onStage: stage => {
+          if (stage === "uploading_to_gemini") {
+            const msg = "PDF faylı Gemini təhlil xidmətinə göndərilir…";
+            setLiveImportProgress(examFileId, { stage: "uploading_to_ai", status: "processing", progress: 12, message: msg });
+            void syncJobProgress(12, msg, 0, true);
+          } else if (stage === "waiting_file_active") {
+            const msg = "Gemini yüklənmiş PDF-i səhifə-səhifə hazırlayır…";
+            setLiveImportProgress(examFileId, { stage: "extracting", status: "processing", progress: 16, message: msg });
+            void syncJobProgress(16, msg, 0, true);
+          } else if (stage === "analyzing_stream") {
+            const msg = "AI səhifələri oxuyur və sualları çıxarır…";
+            setLiveImportProgress(examFileId, { stage: "extracting", status: "processing", progress: 20, message: msg });
+            void syncJobProgress(20, msg, 0, true);
+          }
+        },
+        onProgress: ({ detectedQuestions, charsReceived }) => {
+          const pct = computeStreamProgress(detectedQuestions, file.expectedQuestionCount ?? null, charsReceived);
+          const msg = detectedQuestions > 0
+            ? (file.expectedQuestionCount
+              ? `AI təhlili: ${detectedQuestions} / ${file.expectedQuestionCount} sual oxundu…`
+              : `AI təhlili: indiyə qədər ${detectedQuestions} sual oxundu…`)
+            : "AI səhifələri oxuyur və sual quruluşunu hazırlayır…";
+          setLiveImportProgress(examFileId, {
+            stage: "extracting",
+            status: "processing",
+            progress: pct,
+            message: msg,
+            detectedQuestionCount: detectedQuestions,
+          });
+          void syncJobProgress(pct, msg, detectedQuestions);
+        },
+      },
+    );
+
     const extracted = extraction.questions;
     if (!extracted.length) throw new Error("PDF-dən heç bir sual çıxarılmadı; fayl uğursuz kimi saxlanıldı və yenidən emal edilə bilər.");
     const extractionWarnings = completenessWarnings(extraction.completeness);
@@ -461,13 +642,42 @@ async function runImport(examFileId: number) {
       extractionWarnings.push(`Gözlənilən ${file.expectedQuestionCount} sualdan ${extracted.length} sual çıxarıldı.`);
     }
     extractionWarnings.push(...questionSequenceWarnings(extracted, file.years ?? []));
-    if (!db) {
-      const job = memoryStore.importJobs.find(j => j.id === jobId);
-      if (job) { job.progress = 75; job.message = `${extracted.length} sual tanındı; mənbə və təkrar yoxlanır.`; job.updatedAt = new Date(); }
-    } else {
-      await db.update(importJobs).set({ progress: 75, message: `${extracted.length} sual tanındı; mənbə və təkrar yoxlanır.` }).where(eq(importJobs.id, jobId));
-    }
-    const result = await persistExtractedQuestions(examFileId, file.sha256, file.years ?? [], extracted, extractionWarnings);
+
+    const savingStartMsg = `${extracted.length} sual tanındı; mənbə, təkrarlar və mövzular yoxlanır…`;
+    setLiveImportProgress(examFileId, {
+      stage: "saving",
+      status: "processing",
+      progress: 74,
+      message: savingStartMsg,
+      detectedQuestionCount: extracted.length,
+    });
+    await syncJobProgress(74, savingStartMsg, extracted.length, true);
+
+    const result = await persistExtractedQuestions(
+      examFileId,
+      file.sha256,
+      file.years ?? [],
+      extracted,
+      extractionWarnings,
+      async stats => {
+        const pct = 74 + Math.round((stats.processed / Math.max(1, stats.total)) * 20);
+        const dupText = stats.skippedDuplicates > 0 ? `, ${stats.skippedDuplicates} təkrar` : "";
+        const msg = `Bazaya yazılır: ${stats.processed} / ${stats.total} sual emal olundu (${stats.inserted} yeni${dupText})…`;
+        setLiveImportProgress(examFileId, {
+          stage: "saving",
+          status: "processing",
+          progress: pct,
+          message: msg,
+          detectedQuestionCount: stats.total,
+          processedQuestionCount: stats.processed,
+          insertedCount: stats.inserted,
+          skippedDuplicateCount: stats.skippedDuplicates,
+          needsReviewCount: stats.needsReview,
+        });
+        await syncJobProgress(pct, msg, stats.total, stats.processed === stats.total);
+      },
+    );
+
     let totalQuestions = 0;
     let needsReview = 0;
     if (!db) {
@@ -480,6 +690,34 @@ async function runImport(examFileId: number) {
       totalQuestions = totalResult?.value ?? 0;
       needsReview = reviewResult?.value ?? 0;
     }
+
+    if (cloudSyncContext) {
+      const fileQuestions = memoryStore.questions.filter(item => item.examFileId === examFileId);
+      setLiveImportProgress(examFileId, {
+        stage: "syncing_cloud",
+        status: "processing",
+        progress: 96,
+        message: `Firestore bulud bazasına yazılır (${fileQuestions.length} sual)…`,
+        detectedQuestionCount: extracted.length,
+        processedQuestionCount: extracted.length,
+        insertedCount: result.inserted,
+        skippedDuplicateCount: result.skippedDuplicates,
+        needsReviewCount: needsReview,
+      });
+      await syncExamFileToFirestore(examFileId, cloudSyncContext.firebaseIdToken);
+      for (let i = 0; i < fileQuestions.length; i += 1) {
+        await syncQuestionToFirestore(fileQuestions[i].id, cloudSyncContext.firebaseIdToken, cloudSyncContext.userOpenId);
+        if ((i + 1) % 5 === 0 || i + 1 === fileQuestions.length) {
+          setLiveImportProgress(examFileId, {
+            stage: "syncing_cloud",
+            status: "processing",
+            progress: 96 + Math.round(((i + 1) / Math.max(1, fileQuestions.length)) * 3),
+            message: `Firestore bulud bazasına yazılır: ${i + 1} / ${fileQuestions.length} sual…`,
+          });
+        }
+      }
+    }
+
     const state = needsReview ? "needs_review" : "completed";
     const warningText = extractionWarnings.length ? ` Tamlıq yoxlanışı: ${extractionWarnings.join(" ")}` : "";
     const doneMsg = `${result.inserted} yeni sual saxlanıldı; ${needsReview} sual yoxlanış tələb edir.${warningText}`;
@@ -491,6 +729,17 @@ async function runImport(examFileId: number) {
     }
     await updateExamFileState(examFileId, state, totalQuestions);
     memoryStore.saveSnapshot();
+    setLiveImportProgress(examFileId, {
+      stage: state,
+      status: state,
+      progress: 100,
+      message: doneMsg,
+      detectedQuestionCount: extracted.length,
+      processedQuestionCount: extracted.length,
+      insertedCount: result.inserted,
+      skippedDuplicateCount: result.skippedDuplicates,
+      needsReviewCount: needsReview,
+    });
     return { jobId, detected: extracted.length, inserted: result.inserted, needsReview, status: state };
   } catch (error) {
     const message = error instanceof Error ? error.message.slice(0, 1000) : "PDF emalı alınmadı.";
@@ -502,6 +751,12 @@ async function runImport(examFileId: number) {
     }
     await updateExamFileState(examFileId, "failed");
     memoryStore.saveSnapshot();
+    setLiveImportProgress(examFileId, {
+      stage: "failed",
+      status: "failed",
+      progress: 100,
+      message,
+    });
     throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message });
   }
 }
@@ -635,28 +890,91 @@ export const questionBankRouter = router({
     }
     return { success };
   }),
-  importPdf: adminProcedure.input(z.object({ examFileId: z.number().int().positive() })).mutation(async ({ input, ctx }) => {
-    const res = await runImport(input.examFileId);
-    if (ctx.firebaseIdToken && ctx.user) {
-      await syncExamFileToFirestore(input.examFileId, ctx.firebaseIdToken);
-      for (const q of memoryStore.questions.filter(item => item.examFileId === input.examFileId)) {
-        await syncQuestionToFirestore(q.id, ctx.firebaseIdToken, ctx.user.openId);
+  importProgress: adminProcedure
+    .input(z.object({ examFileIds: z.array(z.number().int().positive()).max(50).optional() }).optional())
+    .query(async ({ input }) => {
+      const requestedIds = input?.examFileIds?.length
+        ? [...new Set(input.examFileIds)]
+        : [...liveImportProgressMap.keys()];
+      if (!requestedIds.length) return [];
+
+      const db = await getDb();
+      const results: LiveImportProgress[] = [];
+      for (const examFileId of requestedIds) {
+        const live = liveImportProgressMap.get(examFileId);
+        if (live) {
+          results.push(live);
+          continue;
+        }
+        const file = await getExamFileById(examFileId);
+        if (!db) {
+          const jobs = memoryStore.importJobs
+            .filter(j => j.examFileId === examFileId)
+            .sort((a, b) => b.id - a.id);
+          const latest = jobs[0];
+          if (!latest && !file) continue;
+          const status = (latest?.status ?? (file?.processingStatus === "uploaded" ? "queued" : file?.processingStatus) ?? "queued") as LiveImportProgress["status"];
+          const stage: LiveImportStage = status === "processing" ? "extracting" : status;
+          results.push({
+            examFileId,
+            jobId: latest?.id ?? null,
+            stage,
+            status,
+            progress: latest?.progress ?? 0,
+            message: latest?.message ?? "PDF emal gözləyir.",
+            expectedQuestionCount: file?.expectedQuestionCount ?? null,
+            detectedQuestionCount: latest?.detectedQuestionCount ?? file?.questionCount ?? 0,
+            processedQuestionCount: status === "completed" || status === "needs_review" ? (latest?.detectedQuestionCount ?? file?.questionCount ?? 0) : 0,
+            insertedCount: file?.questionCount ?? 0,
+            skippedDuplicateCount: 0,
+            needsReviewCount: 0,
+            startedAt: latest?.createdAt ? latest.createdAt.toISOString() : null,
+            updatedAt: (latest?.updatedAt ?? file?.updatedAt ?? new Date()).toISOString(),
+          });
+        } else {
+          const [latest] = await db
+            .select()
+            .from(importJobs)
+            .where(eq(importJobs.examFileId, examFileId))
+            .orderBy(desc(importJobs.id))
+            .limit(1);
+          if (!latest && !file) continue;
+          const status = (latest?.status ?? (file?.processingStatus === "uploaded" ? "queued" : file?.processingStatus) ?? "queued") as LiveImportProgress["status"];
+          const stage: LiveImportStage = status === "processing" ? "extracting" : status;
+          results.push({
+            examFileId,
+            jobId: latest?.id ?? null,
+            stage,
+            status,
+            progress: latest?.progress ?? 0,
+            message: latest?.message ?? "PDF emal gözləyir.",
+            expectedQuestionCount: file?.expectedQuestionCount ?? null,
+            detectedQuestionCount: latest?.detectedQuestionCount ?? file?.questionCount ?? 0,
+            processedQuestionCount: status === "completed" || status === "needs_review" ? (latest?.detectedQuestionCount ?? file?.questionCount ?? 0) : 0,
+            insertedCount: file?.questionCount ?? 0,
+            skippedDuplicateCount: 0,
+            needsReviewCount: 0,
+            startedAt: latest?.createdAt ? latest.createdAt.toISOString() : null,
+            updatedAt: (latest?.updatedAt ?? file?.updatedAt ?? new Date()).toISOString(),
+          });
+        }
       }
-    }
-    return res;
+      return results;
+    }),
+  importPdf: adminProcedure.input(z.object({ examFileId: z.number().int().positive() })).mutation(async ({ input, ctx }) => {
+    const cloudSyncContext = ctx.firebaseIdToken && ctx.user
+      ? { firebaseIdToken: ctx.firebaseIdToken, userOpenId: ctx.user.openId }
+      : undefined;
+    return runImport(input.examFileId, cloudSyncContext);
   }),
   retryImport: adminProcedure.input(z.object({ examFileId: z.number().int().positive() })).mutation(async ({ input, ctx }) => {
     const file = await getExamFileById(input.examFileId);
     if (!file) throw new TRPCError({ code: "NOT_FOUND", message: "PDF mənbəyi tapılmadı." });
     if (!["failed", "uploaded", "completed", "needs_review"].includes(file.processingStatus)) throw new TRPCError({ code: "CONFLICT", message: "Bu PDF hazırda emal olunur və yenidən başladılmış hesab edilmir." });
-    const res = await runImport(file.id);
-    if (ctx.firebaseIdToken && ctx.user) {
-      await syncExamFileToFirestore(file.id, ctx.firebaseIdToken);
-      for (const q of memoryStore.questions.filter(item => item.examFileId === file.id)) {
-        await syncQuestionToFirestore(q.id, ctx.firebaseIdToken, ctx.user.openId);
-      }
-    }
-    return res;
+    const cloudSyncContext = ctx.firebaseIdToken && ctx.user
+      ? { firebaseIdToken: ctx.firebaseIdToken, userOpenId: ctx.user.openId }
+      : undefined;
+    return runImport(file.id, cloudSyncContext);
   }),
   syncFirestore: adminProcedure.mutation(async ({ ctx }) => {
     if (!ctx.firebaseIdToken || !ctx.user || ctx.user.loginMethod !== "firebase") {

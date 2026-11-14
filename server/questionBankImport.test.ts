@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { completenessWarnings, inferYears, planSourceFingerprints } from "./questionBank";
+import { completenessWarnings, computeStreamProgress, inferYears, planSourceFingerprints } from "./questionBank";
 
 describe("completenessWarnings", () => {
   it("does not warn for a likely-complete extraction just because it has a note", () => {
@@ -71,5 +71,25 @@ describe("planSourceFingerprints", () => {
       `${fileSha.slice(0, 50)}:2010:22:dup3`,
     ]);
     expect(plan.slice(1).every(item => item.collision)).toBe(true);
+  });
+});
+
+describe("computeStreamProgress", () => {
+  it("scales proportionally from 20% to 72% when expected question count is provided", () => {
+    expect(computeStreamProgress(0, 25, 0)).toBe(20);
+    expect(computeStreamProgress(12, 25, 3000)).toBe(45);
+    expect(computeStreamProgress(25, 25, 8000)).toBe(72);
+    expect(computeStreamProgress(30, 25, 9000)).toBe(72);
+  });
+
+  it("grows smoothly and stays within 18%-72% when expected count is unknown", () => {
+    const p0 = computeStreamProgress(0, null, 0);
+    const p5 = computeStreamProgress(5, null, 2000);
+    const p25 = computeStreamProgress(25, null, 12000);
+    const p200 = computeStreamProgress(200, null, 90000);
+    expect(p0).toBe(18);
+    expect(p5).toBeGreaterThan(p0);
+    expect(p25).toBeGreaterThan(p5);
+    expect(p200).toBeLessThanOrEqual(72);
   });
 });

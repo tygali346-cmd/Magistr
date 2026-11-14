@@ -1,6 +1,5 @@
-import { useRef, useState } from "react";
-import { Archive, ArrowDownToLine, Check, CircleHelp, FileQuestion, FileText, FileUp, LoaderCircle, LogOut, Plus, RotateCcw, ShieldAlert, Sparkles, UploadCloud, X } from "lucide-react";
-import { Link } from "wouter";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Archive, ArrowDownToLine, Check, CircleHelp, FileText, FileUp, LoaderCircle, LogOut, Plus, RotateCcw, ShieldAlert, Sparkles, UploadCloud, X } from "lucide-react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import AppShell from "@/components/AppShell";
 import AnswerKeyImportPanel from "@/components/AnswerKeyImportPanel";
@@ -9,7 +8,32 @@ import { trpc } from "@/lib/trpc";
 import { errorMessage, formatBytes, formatDate, type TopicRecord } from "@/lib/study";
 
 const MAX_PDF_BYTES = 50 * 1024 * 1024;
-type LocalFile = { file: File; status: "ready" | "working" | "done" | "error"; note?: string; expectedQuestionCount?: string };
+type LocalFile = {
+  file: File;
+  status: "ready" | "working" | "done" | "error";
+  note?: string;
+  expectedQuestionCount?: string;
+  examFileId?: number;
+  startedAtMs?: number;
+  finishedAtMs?: number;
+};
+
+type LiveImportProgress = {
+  examFileId: number;
+  jobId: number | null;
+  stage: string;
+  status: string;
+  progress: number;
+  message: string;
+  expectedQuestionCount: number | null;
+  detectedQuestionCount: number;
+  processedQuestionCount: number;
+  insertedCount: number;
+  skippedDuplicateCount: number;
+  needsReviewCount: number;
+  startedAt: string | null;
+  updatedAt: string;
+};
 
 export default function UploadPage() {
   const { logout } = useAuth();
@@ -18,6 +42,9 @@ export default function UploadPage() {
   const [yearsText, setYearsText] = useState("");
   const [dragging, setDragging] = useState(false);
   const [working, setWorking] = useState(false);
+  const [retryingIds, setRetryingIds] = useState<number[]>([]);
+  const [retryStartedAt, setRetryStartedAt] = useState<Record<number, number>>({});
+  const [nowMs, setNowMs] = useState(() => Date.now());
   const [uploadError, setUploadError] = useState("");
   const [archiveNotice, setArchiveNotice] = useState("");
   const [manualOpen, setManualOpen] = useState(false);
@@ -42,6 +69,43 @@ export default function UploadPage() {
   const deleteMutation = trpc.questionBank.deleteExamFile.useMutation();
   const backupQuery = trpc.questionBank.exportBackup.useQuery(undefined, { enabled: false, retry: false });
   const years = yearsText.split(/[\s,;]+/).map(part => Number(part)).filter(value => Number.isInteger(value) && value >= 1900 && value <= 2100);
+
+  const activeExamFileIds = useMemo(() => {
+    const ids = new Set<number>();
+    for (const item of files) {
+      if (item.status === "working" && item.examFileId) ids.add(item.examFileId);
+    }
+    for (const id of retryingIds) ids.add(id);
+    for (const exam of examsQuery.data ?? []) {
+      if (exam.processingStatus === "processing") ids.add(exam.id);
+    }
+    return [...ids];
+  }, [files, retryingIds, examsQuery.data]);
+
+  const isAnyProcessing = working || activeExamFileIds.length > 0;
+
+  useEffect(() => {
+    if (!isAnyProcessing) return;
+    setNowMs(Date.now());
+    const timer = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [isAnyProcessing]);
+
+  const progressQuery = trpc.questionBank.importProgress.useQuery(
+    { examFileIds: activeExamFileIds },
+    {
+      enabled: activeExamFileIds.length > 0,
+      refetchInterval: activeExamFileIds.length > 0 ? 700 : false,
+    },
+  );
+
+  const progressByExamId = useMemo(() => {
+    const map = new Map<number, LiveImportProgress>();
+    for (const entry of (progressQuery.data ?? []) as LiveImportProgress[]) {
+      map.set(entry.examFileId, entry);
+    }
+    return map;
+  }, [progressQuery.data]);
 
   function addFiles(fileList: FileList | File[]) {
     const accepted: LocalFile[] = [];
@@ -71,7 +135,13 @@ export default function UploadPage() {
     for (let index = 0; index < files.length; index += 1) {
       const current = files[index];
       if (current.status !== "ready" && current.status !== "error") continue;
-      updateFile(index, { status: "working", note: "PDF təhlükəsiz mənbə yaddaşına yüklənir…" });
+      const startedAtMs = Date.now();
+      updateFile(index, {
+        status: "working",
+        startedAtMs,
+        finishedAtMs: undefined,
+        note: "PDF təhlükəsiz mənbə yaddaşına yüklənir…",
+      });
       try {
         const response = await fetch("/api/import/pdf", {
           method: "POST",
@@ -87,20 +157,33 @@ export default function UploadPage() {
         });
         const uploaded = await response.json() as { examFileId?: number; duplicate?: boolean; filename?: string; processingStatus?: string; expectedQuestionCount?: number | null; error?: string };
         if (!response.ok || !uploaded.examFileId) throw new Error(uploaded.error || "PDF yüklənmədi.");
+        updateFile(index, { examFileId: uploaded.examFileId });
         if (uploaded.duplicate) {
           if (uploaded.processingStatus === "failed" || uploaded.processingStatus === "uploaded") {
             const result = await utils.client.questionBank.retryImport.mutate({ examFileId: uploaded.examFileId });
-            updateFile(index, { status: "done", note: `Eyni PDF tapıldı və yenidən emal edildi · ${result.inserted} yeni sual · ${result.needsReview} yoxlanış qeydi.` });
+            updateFile(index, {
+              status: "done",
+              finishedAtMs: Date.now(),
+              note: `Eyni PDF tapıldı və yenidən emal edildi · ${result.detected} sual oxundu · ${result.inserted} yeni sual · ${result.needsReview} yoxlanış qeydi.`,
+            });
           } else {
-            updateFile(index, { status: "done", note: uploaded.processingStatus === "processing" ? "Eyni PDF hazırda emal olunur." : "Eyni fayl artıq arxivdə var; əlavə emal tələb olunmur." });
+            updateFile(index, {
+              status: "done",
+              finishedAtMs: Date.now(),
+              note: uploaded.processingStatus === "processing" ? "Eyni PDF hazırda emal olunur." : "Eyni fayl artıq arxivdə var; əlavə emal tələb olunmur.",
+            });
           }
           continue;
         }
-        updateFile(index, { status: "working", note: "Sual mətni, cavab variantları və mövzular təhlil olunur…" });
+        updateFile(index, { status: "working", examFileId: uploaded.examFileId, note: "Sual mətni, cavab variantları və mövzular təhlil olunur…" });
         const result = await utils.client.questionBank.importPdf.mutate({ examFileId: uploaded.examFileId });
-        updateFile(index, { status: "done", note: `${result.inserted} sual saxlanıldı · ${result.needsReview} sual yoxlanış siyahısında.` });
+        updateFile(index, {
+          status: "done",
+          finishedAtMs: Date.now(),
+          note: `${result.detected} sual oxundu · ${result.inserted} sual saxlanıldı · ${result.needsReview} sual yoxlanış siyahısında.`,
+        });
       } catch (error) {
-        updateFile(index, { status: "error", note: errorMessage(error, "PDF emalı uğursuz oldu.") });
+        updateFile(index, { status: "error", finishedAtMs: Date.now(), note: errorMessage(error, "PDF emalı uğursuz oldu.") });
       }
     }
     setWorking(false);
@@ -111,11 +194,15 @@ export default function UploadPage() {
 
   async function retryFile(examFileId: number) {
     setUploadError("");
+    setRetryingIds(prev => prev.includes(examFileId) ? prev : [...prev, examFileId]);
+    setRetryStartedAt(prev => ({ ...prev, [examFileId]: Date.now() }));
     try {
       await retryMutation.mutateAsync({ examFileId });
       await Promise.all([examsQuery.refetch(), utils.questionBank.dashboard.invalidate(), utils.questionBank.reviewQueue.invalidate()]);
     } catch (error) {
       setUploadError(errorMessage(error, "PDF-i yenidən emal etmək alınmadı."));
+    } finally {
+      setRetryingIds(prev => prev.filter(id => id !== examFileId));
     }
   }
 
@@ -186,7 +273,31 @@ export default function UploadPage() {
 
       {files.length > 0 && <section className="card card-pad" style={{ marginTop: 15 }}>
         <div className="section-title-row"><div><h2>Yükləməyə hazır fayllar</h2><p>Fayl adından illər müəyyən edilə bilər; yuxarıdakı il dəyərləri hamısına tətbiq olunur.</p></div><button className="btn btn-quiet" onClick={() => setFiles([])} disabled={working}>Hamısını sil</button></div>
-        <div className="upload-file-list">{files.map((item, index) => <div className="upload-file-row" key={`${item.file.name}-${index}`}><FileText size={17} /><div><strong>{item.file.name}</strong><span>{formatBytes(item.file.size)}{item.note ? ` · ${item.note}` : " · Hazırdır"}</span><label className="caption" style={{ display: "inline-flex", alignItems: "center", gap: 6, marginTop: 5 }}>Gözlənilən sual sayı (istəyə görə)<input className="field" type="number" min="1" max="500" value={item.expectedQuestionCount ?? ""} disabled={working} onChange={event => updateFile(index, { expectedQuestionCount: event.target.value })} style={{ width: 105, padding: "5px 7px" }} /></label></div>{item.status === "working" ? <LoaderCircle size={16} className="animate-spin" /> : item.status === "done" ? <Check size={16} color="#3a8a70" /> : <button className="icon-button" onClick={() => setFiles(previous => previous.filter((_, fileIndex) => fileIndex !== index))} disabled={working} aria-label="Faylı sil"><X size={14} /></button>}</div>)}</div>
+        <div className="upload-file-list">{files.map((item, index) => {
+          const live = item.examFileId ? progressByExamId.get(item.examFileId) : undefined;
+          const expectedCount = item.expectedQuestionCount?.trim() ? Number(item.expectedQuestionCount.trim()) : null;
+          return (
+            <div className="upload-file-row" key={`${item.file.name}-${index}`}>
+              <FileText size={17} />
+              <div>
+                <strong>{item.file.name}</strong>
+                <span>{formatBytes(item.file.size)}{item.note ? ` · ${item.note}` : " · Hazırdır"}{item.status === "done" && item.startedAtMs && item.finishedAtMs ? ` · Müddət: ${formatElapsed(item.finishedAtMs - item.startedAtMs)}` : ""}</span>
+                {item.status === "working" ? (
+                  <ImportProgressPanel
+                    progress={live}
+                    fallbackMessage={item.note ?? "PDF emal olunur…"}
+                    startedAtMs={item.startedAtMs}
+                    nowMs={nowMs}
+                    expectedQuestionCount={Number.isInteger(expectedCount) ? expectedCount : null}
+                  />
+                ) : (
+                  <label className="caption" style={{ display: "inline-flex", alignItems: "center", gap: 6, marginTop: 5 }}>Gözlənilən sual sayı (istəyə görə)<input className="field" type="number" min="1" max="500" value={item.expectedQuestionCount ?? ""} disabled={working} onChange={event => updateFile(index, { expectedQuestionCount: event.target.value })} style={{ width: 105, padding: "5px 7px" }} /></label>
+                )}
+              </div>
+              {item.status === "working" ? <LoaderCircle size={16} className="animate-spin" /> : item.status === "done" ? <Check size={16} color="#3a8a70" /> : <button className="icon-button" onClick={() => setFiles(previous => previous.filter((_, fileIndex) => fileIndex !== index))} disabled={working} aria-label="Faylı sil"><X size={14} /></button>}
+            </div>
+          );
+        })}</div>
         {uploadError && <div className="error-box" style={{ marginTop: 12 }}>{uploadError}</div>}
         <button className="btn btn-primary" onClick={uploadAndImport} disabled={working || !files.some(item => item.status === "ready" || item.status === "error")} style={{ marginTop: 15 }}><Sparkles size={14} /> {working ? "PDF emal olunur…" : "Yüklə və AI ilə təhlil et"}</button>
       </section>}
@@ -198,7 +309,40 @@ export default function UploadPage() {
         {examsQuery.isError && <div className="error-box">{errorMessage(examsQuery.error)} <button className="btn btn-secondary" onClick={() => examsQuery.refetch()}>Yenidən yoxla</button></div>}
         {!examsQuery.isLoading && examsQuery.data?.length === 0 && <div className="empty-state"><div className="empty-icon"><FileText size={17} /></div><h3>PDF mənbəyi yoxdur</h3><p>İlk imtahan faylını yükləyin; mənbə sənədlər bu siyahıda qalacaq.</p></div>}
         {uploadError && <div className="error-box" style={{ marginTop: 12 }}>{uploadError}</div>}
-        <div className="upload-jobs">{examsQuery.data?.map(file => <div className="card upload-job" key={file.id}><div><h3>{file.title}</h3><p>{file.years?.length ? file.years.join(" · ") : file.mimeType === "application/pdf" ? "İl göstərilməyib" : "Əl ilə əlavə olunan suallar"} · {file.questionCount} sual{file.expectedQuestionCount ? ` / gözlənilən ${file.expectedQuestionCount}` : ""} · {formatBytes(file.fileSize)}</p><div className="upload-job-meta"><span className={`tag${file.processingStatus === "needs_review" ? " warning" : file.processingStatus === "completed" ? " success" : ""}`}>{statusLabel(file.processingStatus)}</span><span className="caption">{formatDate(file.createdAt)}</span>{file.sourceUrl && !file.sourceUrl.startsWith("manual://") && <a href={file.sourceUrl} target="_blank" rel="noreferrer" className="file-row-link"><FileText size={12} /> PDF-i aç</a>}{["failed", "uploaded", "completed", "needs_review"].includes(file.processingStatus) && <button className="btn btn-secondary" disabled={retryMutation.isPending} onClick={() => void retryFile(file.id)}><RotateCcw size={12} /> {retryMutation.isPending ? "Yenidən işlənir…" : "Yenidən emal et"}</button>}{file.mimeType === "application/pdf" && <button className="btn btn-secondary" disabled={deleteMutation.isPending} onClick={() => void deleteFile(file.id, file.questionCount)}><X size={12} /> {deleteMutation.isPending ? "Silinir…" : "Faylı sil"}</button>}</div></div><span className="tag">{file.filename}</span></div>)}</div>
+        <div className="upload-jobs">{examsQuery.data?.map(file => {
+          const isRetryingThis = retryingIds.includes(file.id);
+          const isActive = isRetryingThis || file.processingStatus === "processing";
+          const live = isActive ? progressByExamId.get(file.id) : undefined;
+          return (
+            <div className="card upload-job" key={file.id}>
+              <div>
+                <h3>{file.title}</h3>
+                <p>{file.years?.length ? file.years.join(" · ") : file.mimeType === "application/pdf" ? "İl göstərilməyib" : "Əl ilə əlavə olunan suallar"} · {file.questionCount} sual{file.expectedQuestionCount ? ` / gözlənilən ${file.expectedQuestionCount}` : ""} · {formatBytes(file.fileSize)}</p>
+                <div className="upload-job-meta">
+                  <span className={`tag${file.processingStatus === "needs_review" ? " warning" : file.processingStatus === "completed" ? " success" : ""}`}>{statusLabel(isRetryingThis ? "processing" : file.processingStatus)}</span>
+                  <span className="caption">{formatDate(file.createdAt)}</span>
+                  {file.sourceUrl && !file.sourceUrl.startsWith("manual://") && <a href={file.sourceUrl} target="_blank" rel="noreferrer" className="file-row-link"><FileText size={12} /> PDF-i aç</a>}
+                  {["failed", "uploaded", "completed", "needs_review"].includes(file.processingStatus) && (
+                    <button className="btn btn-secondary" disabled={isRetryingThis} onClick={() => void retryFile(file.id)}>
+                      <RotateCcw size={12} className={isRetryingThis ? "animate-spin" : undefined} /> {isRetryingThis ? "Emal olunur…" : "Yenidən emal et"}
+                    </button>
+                  )}
+                  {file.mimeType === "application/pdf" && <button className="btn btn-secondary" disabled={deleteMutation.isPending || isRetryingThis} onClick={() => void deleteFile(file.id, file.questionCount)}><X size={12} /> {deleteMutation.isPending ? "Silinir…" : "Faylı sil"}</button>}
+                </div>
+                {isActive && (
+                  <ImportProgressPanel
+                    progress={live}
+                    fallbackMessage="Yenidən emal başladılır…"
+                    startedAtMs={retryStartedAt[file.id]}
+                    nowMs={nowMs}
+                    expectedQuestionCount={file.expectedQuestionCount}
+                  />
+                )}
+              </div>
+              <span className="tag">{file.filename}</span>
+            </div>
+          );
+        })}</div>
       </section>
 
       <AnswerKeyImportPanel />
@@ -218,6 +362,99 @@ export default function UploadPage() {
       {exportError && <div className="error-box" style={{ marginTop: 12 }}>{exportError}</div>}
     </AppShell>
   );
+}
+
+function ImportProgressPanel({
+  progress,
+  fallbackMessage,
+  startedAtMs,
+  nowMs,
+  expectedQuestionCount,
+}: {
+  progress?: LiveImportProgress;
+  fallbackMessage: string;
+  startedAtMs?: number;
+  nowMs: number;
+  expectedQuestionCount?: number | null;
+}) {
+  const pct = progress?.progress ?? 4;
+  const serverStartMs = progress?.startedAt ? Date.parse(progress.startedAt) : NaN;
+  const effectiveStartMs = Number.isFinite(serverStartMs) ? serverStartMs : (startedAtMs ?? nowMs);
+  const elapsedMs = Math.max(0, nowMs - effectiveStartMs);
+  const expected = progress?.expectedQuestionCount ?? expectedQuestionCount ?? null;
+  const detected = progress?.detectedQuestionCount ?? 0;
+  const processed = progress?.processedQuestionCount ?? 0;
+  const inserted = progress?.insertedCount ?? 0;
+  const duplicates = progress?.skippedDuplicateCount ?? 0;
+  const needsReview = progress?.needsReviewCount ?? 0;
+  const stageText = stageLabel(progress?.stage ?? "preparing_pdf");
+  const message = progress?.message || fallbackMessage;
+
+  return (
+    <div className="import-progress-panel" aria-live="polite">
+      <div className="import-progress-head">
+        <span className="import-progress-stage">
+          <LoaderCircle size={13} className="animate-spin" />
+          {stageText}
+        </span>
+        <span className="import-progress-nums">
+          <span>Keçən vaxt: {formatElapsed(elapsedMs)}</span>
+          <span aria-hidden="true">·</span>
+          <strong>{pct}%</strong>
+        </span>
+      </div>
+      <div className="import-progress-track" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
+        <div className="import-progress-fill" style={{ width: `${Math.max(4, pct)}%` }} />
+      </div>
+      <p className="import-progress-message">{message}</p>
+      <div className="import-progress-metrics">
+        <span>
+          Oxunan sual: <strong>{detected}{expected ? ` / ${expected}` : ""}</strong>
+        </span>
+        {(processed > 0 || progress?.stage === "saving" || progress?.stage === "syncing_cloud") && (
+          <span>
+            Emal olunan: <strong>{processed} / {detected}</strong>
+          </span>
+        )}
+        {(inserted > 0 || processed > 0) && (
+          <span>
+            Saxlanılan: <strong>{inserted}</strong>
+          </span>
+        )}
+        {duplicates > 0 && (
+          <span>
+            Təkrar: <strong>{duplicates}</strong>
+          </span>
+        )}
+        {needsReview > 0 && (
+          <span>
+            Yoxlanış: <strong>{needsReview}</strong>
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function formatElapsed(ms: number) {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
+function stageLabel(stage: string) {
+  return ({
+    queued: "Növbədədir",
+    preparing_pdf: "PDF hazırlanır",
+    uploading_to_ai: "AI-a göndərilir",
+    extracting: "Suallar oxunur",
+    saving: "Bazaya yazılır",
+    syncing_cloud: "Bulud bazasına yazılır",
+    completed: "Tamamlandı",
+    needs_review: "Yoxlanış lazımdır",
+    failed: "Xəta",
+  } as Record<string, string>)[stage] ?? "Emal olunur";
 }
 
 function statusLabel(status: string) {

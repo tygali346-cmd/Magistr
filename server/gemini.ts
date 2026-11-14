@@ -85,11 +85,95 @@ async function deleteTemporaryPdf(ai: GoogleGenAI, fileName: string): Promise<vo
   );
 }
 
+export type GeminiStreamStage =
+  | "uploading_to_gemini"
+  | "waiting_file_active"
+  | "analyzing_stream";
+
+export type GeminiStreamProgress = {
+  detectedQuestions: number;
+  chunkCount: number;
+  charsReceived: number;
+};
+
+export type ExtractPdfProgressCallbacks = {
+  onStage?: (stage: GeminiStreamStage) => void;
+  onProgress?: (progress: GeminiStreamProgress) => void;
+};
+
+/**
+ * Counts how many top-level objects inside `"questions": [ ... ]` have closed
+ * so far in a streamed JSON response, ignoring braces/brackets inside strings
+ * and inside nested arrays/objects (such as options or media).
+ */
+export function countCompletedQuestionsInJsonStream(partialJson: string): number {
+  const keyMatch = /"questions"\s*:\s*\[/.exec(partialJson);
+  if (!keyMatch) return 0;
+
+  let index = keyMatch.index + keyMatch[0].length;
+  let inString = false;
+  let escaped = false;
+  let objectDepth = 0;
+  let nestedArrayDepth = 0;
+  let completed = 0;
+
+  for (; index < partialJson.length; index += 1) {
+    const ch = partialJson[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === "\\") {
+        escaped = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+
+    if (ch === "{") {
+      objectDepth += 1;
+      continue;
+    }
+
+    if (ch === "}") {
+      if (objectDepth === 1) {
+        completed += 1;
+      }
+      if (objectDepth > 0) {
+        objectDepth -= 1;
+      }
+      continue;
+    }
+
+    if (ch === "[") {
+      nestedArrayDepth += 1;
+      continue;
+    }
+
+    if (ch === "]") {
+      if (objectDepth === 0 && nestedArrayDepth === 0) {
+        break;
+      }
+      if (nestedArrayDepth > 0) {
+        nestedArrayDepth -= 1;
+      }
+    }
+  }
+
+  return completed;
+}
+
 export async function extractPdfWithGemini(
   pdfBytes: Buffer,
   filename: string,
   prompt: string,
   schema: Record<string, unknown>,
+  callbacks?: ExtractPdfProgressCallbacks,
 ): Promise<string> {
   if (!pdfBytes.byteLength) {
     throw new Error("Gemini-yə ötürüləcək PDF boşdur.");
@@ -99,6 +183,7 @@ export async function extractPdfWithGemini(
   let uploadedFileName: string | null = null;
 
   try {
+    callbacks?.onStage?.("uploading_to_gemini");
     let uploaded;
     try {
       uploaded = await ai.files.upload({
@@ -117,28 +202,61 @@ export async function extractPdfWithGemini(
     }
     uploadedFileName = uploaded.name;
 
+    callbacks?.onStage?.("waiting_file_active");
     const readyFile = await waitUntilFileActive(ai, uploaded);
     const fileUri = readyFile.uri || uploaded.uri;
     const fileMimeType = readyFile.mimeType || uploaded.mimeType || "application/pdf";
 
-    let response: GenerateContentResponse;
+    callbacks?.onStage?.("analyzing_stream");
+    const requestParams = {
+      model: GEMINI_STANDARD_MODEL,
+      contents: [
+        createPartFromUri(fileUri, fileMimeType),
+        prompt,
+      ],
+      config: {
+        responseMimeType: "application/json",
+        responseJsonSchema: schema,
+      },
+    };
+
+    let output = "";
     try {
-      response = await ai.models.generateContent({
-        model: GEMINI_STANDARD_MODEL,
-        contents: [
-          createPartFromUri(fileUri, fileMimeType),
-          prompt,
-        ],
-        config: {
-          responseMimeType: "application/json",
-          responseJsonSchema: schema,
-        },
-      });
+      const modelsApi = ai.models as typeof ai.models & {
+        generateContentStream?: (params: typeof requestParams) => Promise<AsyncIterable<GenerateContentResponse>>;
+      };
+
+      if (typeof modelsApi.generateContentStream === "function") {
+        const stream = await modelsApi.generateContentStream(requestParams);
+        let collected = "";
+        let chunkCount = 0;
+        for await (const chunk of stream) {
+          const piece = typeof chunk?.text === "string" ? chunk.text : "";
+          if (!piece) continue;
+          collected += piece;
+          chunkCount += 1;
+          callbacks?.onProgress?.({
+            detectedQuestions: countCompletedQuestionsInJsonStream(collected),
+            chunkCount,
+            charsReceived: collected.length,
+          });
+        }
+        output = collected.trim();
+      } else {
+        const response = await ai.models.generateContent(requestParams);
+        output = responseText(response);
+        if (output) {
+          callbacks?.onProgress?.({
+            detectedQuestions: countCompletedQuestionsInJsonStream(output),
+            chunkCount: 1,
+            charsReceived: output.length,
+          });
+        }
+      }
     } catch (error) {
       throw formatGeminiError(error, "Gemini PDF təhlili");
     }
 
-    const output = responseText(response);
     if (!output) {
       throw new Error("Gemini PDF təhlili üçün strukturlaşdırılmış cavab qaytarmadı.");
     }
