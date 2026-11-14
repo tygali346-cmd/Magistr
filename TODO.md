@@ -176,3 +176,12 @@
 - [x] Say serverdən hesablanmalı, əməliyyat admin identifikasiyası ilə qorunmalı və təsdiq zamanı say dəyişibsə köhnə say əsasında əməliyyat aparılmamalıdır.
 
 Yekun yoxlama: TypeScript yoxlaması, 22 regression testi və production build keçdi. Canlı admin sessiyası ilə düymənin vizual click-through testi aparılmadı.
+
+## 15. Answer-key PDF importu və təhlükəsiz uyğunlaşdırma
+
+- [ ] Admin imtahan sualı PDF-indən ayrı cavab açarı PDF-i yükləyə, fənni seçə və il göstəricisini istəyə görə verə bilməlidir.
+- [ ] Gemini yalnız açıq şəkildə çap olunmuş sual nömrəsi, imtahan ili, cavab işarəsi və PDF səhifəsini çıxarmalı; sualı həll etməməli və cavab uydurmamalıdır.
+- [ ] Cavab açarı yalnız eyni fənn + il + sual nömrəsi üzrə tək sualla dəqiq uyğun gələndə, cavab işarəsi həmin sualın mövcud variantlarından biri olanda və AI əminliyi ən azı 95% olanda avtomatik tətbiq edilməlidir.
+- [ ] İl/sual nömrəsi çatışmayan, AI əminliyi 95%-dən aşağı, variant işarəsi uyğun olmayan, birdən çox sualla uyğun gələn və ya mövcud cavab açarı ilə ziddiyyət yaradan sətirlər avtomatik tətbiq edilməməli, ayrıca admin yoxlanışında göstərilməlidir.
+- [ ] Cavab açarı PDF-i, orijinal fayl adı və səhifə istinadı məlumat bazasında saxlanmalı; təsdiqlənmiş cavabda etibarlı mənbə kimi görünməlidir.
+- [ ] Bu import və cavab təsdiqi yalnız konfiqurasiya olunmuş admin üçün açıq olmalı; cavab açarı public API-dən sızmamalı və test bitənədək gizli qalmalıdır.

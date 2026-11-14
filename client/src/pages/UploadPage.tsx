@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { Archive, ArrowDownToLine, Check, CircleHelp, FileQuestion, FileText, FileUp, LoaderCircle, Plus, RotateCcw, ShieldAlert, Sparkles, UploadCloud, X } from "lucide-react";
 import { Link } from "wouter";
 import AppShell from "@/components/AppShell";
+import AnswerKeyImportPanel from "@/components/AnswerKeyImportPanel";
 import { trpc } from "@/lib/trpc";
 import { errorMessage, formatBytes, formatDate, type TopicRecord } from "@/lib/study";
 
@@ -170,6 +171,8 @@ export default function UploadPage() {
         {uploadError && <div className="error-box" style={{ marginTop: 12 }}>{uploadError}</div>}
         <div className="upload-jobs">{examsQuery.data?.map(file => <div className="card upload-job" key={file.id}><div><h3>{file.title}</h3><p>{file.years?.length ? file.years.join(" · ") : file.mimeType === "application/pdf" ? "İl göstərilməyib" : "Əl ilə əlavə olunan suallar"} · {file.questionCount} sual{file.expectedQuestionCount ? ` / gözlənilən ${file.expectedQuestionCount}` : ""} · {formatBytes(file.fileSize)}</p><div className="upload-job-meta"><span className={`tag${file.processingStatus === "needs_review" ? " warning" : file.processingStatus === "completed" ? " success" : ""}`}>{statusLabel(file.processingStatus)}</span><span className="caption">{formatDate(file.createdAt)}</span>{file.sourceUrl && !file.sourceUrl.startsWith("manual://") && <a href={file.sourceUrl} target="_blank" rel="noreferrer" className="file-row-link"><FileText size={12} /> PDF-i aç</a>}{(file.processingStatus === "failed" || file.processingStatus === "uploaded") && <button className="btn btn-secondary" disabled={retryMutation.isPending} onClick={() => void retryFile(file.id)}><RotateCcw size={12} /> {retryMutation.isPending ? "Yenidən işlənir…" : "Yenidən emal et"}</button>}</div></div><span className="tag">{file.filename}</span></div>)}</div>
       </section>
+
+      <AnswerKeyImportPanel />
 
       <section className="card card-pad" style={{ marginTop: 16 }}>
         <div className="section-title-row"><div><h2>Əl ilə sual əlavə et</h2><p>İstifadəçi seçdiyi fənn və mövzu ilə sualı arxivə daxil edə bilər.</p></div><button className="btn btn-secondary" onClick={() => setManualOpen(value => !value)}><Plus size={14} /> {manualOpen ? "Bağla" : "Sual əlavə et"}</button></div>

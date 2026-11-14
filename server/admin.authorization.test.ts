@@ -40,4 +40,13 @@ describe("admin authorization", () => {
       code: "FORBIDDEN",
     });
   });
+
+  it("protects answer-key files, processing, review, approval and dismissal", async () => {
+    const caller = appRouter.createCaller(staleAdminContext);
+    await expect(caller.answerKeys.files()).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(caller.answerKeys.reviewQueue()).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(caller.answerKeys.processPdf({ answerKeyFileId: 1 })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(caller.answerKeys.approveEntry({ entryId: 1, questionId: 1, correctOption: "A", expectedCurrentOption: null, replaceExisting: false })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(caller.answerKeys.dismissEntry({ entryId: 1 })).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
 });

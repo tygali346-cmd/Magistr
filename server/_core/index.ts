@@ -11,6 +11,8 @@ import { sdk } from "./sdk";
 import { isAuthorizedAdmin } from "./adminIdentity";
 import { ENV } from "./env";
 import { ensureTopicCatalog, handlePdfUploadRequest } from "../questionBank";
+import { getAnswerKeyPdfForAdmin, storeUploadedAnswerKeyPdf } from "../answerKeyImport";
+import { TRPCError } from "@trpc/server";
 
 async function startServer() {
   await ensureTopicCatalog();
@@ -51,9 +53,46 @@ async function startServer() {
       res.status(/PDF|ölçüsü|yükləmək olar|Gözlənilən sual sayı/i.test(message) ? 400 : 500).json({ error: message });
     }
   });
-  app.get("/api/platform/config.js", (_req, res) => {
-    res.set("Cache-Control", "no-store").type("application/javascript").send(publicPlatformScript());
+  app.post("/api/import/answer-key", requireAdminPdfUpload, express.raw({ type: "application/pdf", limit: "40mb" }), async (req, res) => {
+    if (!Buffer.isBuffer(req.body)) {
+      res.status(400).json({ error: "Cavab açarı PDF məzmunu tapılmadı." });
+      return;
+    }
+    const rawFilename = req.header("x-original-filename") || "cavab-acari.pdf";
+    let filename = rawFilename;
+    try { filename = decodeURIComponent(rawFilename); } catch { /* retain the supplied name */ }
+    try {
+      const result = await storeUploadedAnswerKeyPdf(req.body, filename, req.header("x-answer-subject"), req.header("x-exam-years"));
+      res.status(result.duplicate ? 200 : 201).json(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Cavab açarı PDF-i yüklənmədi.";
+      const status = error instanceof TRPCError ? (error.code === "CONFLICT" ? 409 : 400) : (/PDF|fənn|imtahan ili|40 MB|yükləmək/i.test(message) ? 400 : 500);
+      res.status(status).json({ error: message });
+    }
   });
+  app.get("/api/admin/answer-keys/:fileId/pdf", requireAdminPdfUpload, async (req, res) => {
+    const fileId = Number(req.params.fileId);
+    if (!Number.isSafeInteger(fileId) || fileId < 1) {
+      res.status(400).json({ error: "PDF identifikatorı etibarsızdır." });
+      return;
+    }
+    try {
+      const file = await getAnswerKeyPdfForAdmin(fileId);
+      if (!file) {
+        res.status(404).json({ error: "Cavab açarı PDF-i tapılmadı." });
+        return;
+      }
+      res.set({
+        "Cache-Control": "private, no-store",
+        "Content-Disposition": `inline; filename="answer-key.pdf"; filename*=UTF-8''${encodeURIComponent(file.filename)}`,
+        "X-Content-Type-Options": "nosniff",
+        "Content-Length": String(file.pdfBytes.byteLength),
+      }).type("application/pdf").send(file.pdfBytes);
+    } catch {
+      res.status(500).json({ error: "Cavab açarı PDF-i oxunmadı." });
+    }
+  });
+  app.get("/api/platform/config.js", (_req, res) => res.set("Cache-Control", "no-store").type("application/javascript").send(publicPlatformScript()));
   registerOAuthRoutes(app);
   // tRPC API
   app.use(

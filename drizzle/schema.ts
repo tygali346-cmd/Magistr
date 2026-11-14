@@ -4,6 +4,7 @@ import {
   index,
   int,
   json,
+  customType,
   mysqlEnum,
   mysqlTable,
   text,
@@ -11,6 +12,10 @@ import {
   uniqueIndex,
   varchar,
 } from "drizzle-orm/mysql-core";
+
+const longblob = customType<{ data: Buffer; driverData: Buffer }>({
+  dataType: () => "longblob",
+});
 
 /** Application identity table retained from the Web starter. */
 export const users = mysqlTable("users", {
@@ -186,7 +191,61 @@ export const importJobs = mysqlTable(
 export type Subject = typeof subjects.$inferSelect;
 export type Topic = typeof topics.$inferSelect;
 export type ExamFile = typeof examFiles.$inferSelect;
+
+/** Answer-key PDFs contain correct answers; bytes are served only by an admin-authorized route. */
+export const answerKeyFiles = mysqlTable(
+  "answerKeyFiles",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    filename: varchar("filename", { length: 255 }).notNull(),
+    sha256: varchar("sha256", { length: 64 }).notNull(),
+    fileSize: int("fileSize").notNull(),
+    pdfBytes: longblob("pdfBytes").notNull(),
+    subjectId: int("subjectId").notNull().references(() => subjects.id),
+    years: json("years").$type<number[]>().notNull(),
+    entryCount: int("entryCount").default(0).notNull(),
+    processingStatus: mysqlEnum("processingStatus", ["uploaded", "processing", "completed", "needs_review", "failed"]).default("uploaded").notNull(),
+    statusMessage: text("statusMessage"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  table => ({
+    shaUnique: uniqueIndex("answer_key_files_sha_unique").on(table.sha256),
+    statusIdx: index("answer_key_files_status_idx").on(table.processingStatus),
+    subjectCreatedIdx: index("answer_key_files_subject_created_idx").on(table.subjectId, table.createdAt),
+  }),
+);
+
+export const answerKeyEntries = mysqlTable(
+  "answerKeyEntries",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    answerKeyFileId: int("answerKeyFileId").notNull().references(() => answerKeyFiles.id, { onDelete: "cascade" }),
+    subjectId: int("subjectId").notNull().references(() => subjects.id),
+    examYear: int("examYear"),
+    questionNumber: int("questionNumber"),
+    answerToken: varchar("answerToken", { length: 32 }).notNull(),
+    suggestedOption: varchar("suggestedOption", { length: 8 }),
+    confidence: float("confidence").notNull(),
+    sourcePage: int("sourcePage"),
+    status: mysqlEnum("status", ["applied", "already_set", "needs_review", "unmatched", "ambiguous", "conflict", "dismissed"]).default("needs_review").notNull(),
+    matchedQuestionId: int("matchedQuestionId").references(() => questions.id, { onDelete: "set null" }),
+    candidateQuestionIds: json("candidateQuestionIds").$type<number[]>().notNull(),
+    reviewNote: text("reviewNote"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  table => ({
+    fileIdx: index("answer_key_entries_file_idx").on(table.answerKeyFileId),
+    statusIdx: index("answer_key_entries_status_idx").on(table.status),
+    questionIdx: index("answer_key_entries_question_idx").on(table.matchedQuestionId),
+    sourceKeyIdx: index("answer_key_entries_source_key_idx").on(table.subjectId, table.examYear, table.questionNumber),
+  }),
+);
+
 export type Question = typeof questions.$inferSelect;
 export type QuestionOption = typeof questionOptions.$inferSelect;
 export type StudyAttempt = typeof studyAttempts.$inferSelect;
 export type ImportJob = typeof importJobs.$inferSelect;
+export type AnswerKeyFile = typeof answerKeyFiles.$inferSelect;
+export type AnswerKeyEntry = typeof answerKeyEntries.$inferSelect;

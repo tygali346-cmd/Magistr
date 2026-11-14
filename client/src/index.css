@@ -557,3 +557,72 @@ h1, h2, h3, h4, .display-type { font-family: "DM Sans", "Noto Sans", sans-serif;
 .brand-row, .hero-side-link, .topic-chip { min-height: 44px; }
 .subject-card-grid, .upload-file-list, .upload-jobs, .result-stats, .quiz-options { gap: 12px; }
 .question-media-table { width: 100%; max-width: 100%; }
+
+.answer-key-panel { margin-top: 32px; }
+.answer-key-safety {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin: 16px 0;
+  padding: 12px 14px;
+  border: 1px solid #dce9dd;
+  border-radius: 12px;
+  color: #466457;
+  background: #f4f8f3;
+  font-size: 13px;
+  line-height: 1.55;
+}
+.answer-key-safety svg { flex: 0 0 auto; margin-top: 2px; }
+.answer-key-upload-form { display: grid; grid-template-columns: minmax(0, 1.4fr) repeat(2, minmax(0, 1fr)); gap: 12px; }
+.answer-key-upload-form input[type="file"] { min-height: 44px; padding: 9px; }
+.answer-key-picked-file, .answer-key-file-row {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--app-line);
+  border-radius: 12px;
+  background: #fbfcf8;
+}
+.answer-key-picked-file { grid-template-columns: 20px minmax(0, 1fr) 44px; color: #4b6157; font-size: 13px; }
+.answer-key-picked-file span, .answer-key-file-copy, .answer-key-entry-head strong { min-width: 0; overflow-wrap: anywhere; }
+.answer-key-help { margin: 12px 0; line-height: 1.55; }
+.answer-key-feedback { margin: 12px 0; }
+.answer-key-files, .answer-key-review { margin-top: 30px; }
+.answer-key-files > h3 { margin: 0 0 10px; color: #3f574c; font-size: 15px; }
+.answer-key-file-row { grid-template-columns: 20px minmax(0, 1fr) auto auto; margin-top: 8px; }
+.answer-key-file-row > svg { color: #729286; }
+.answer-key-file-copy { display: grid; gap: 3px; }
+.answer-key-file-copy strong { color: #354c42; font-size: 13px; }
+.answer-key-file-copy span { color: #78877f; font-size: 12px; overflow-wrap: anywhere; }
+.answer-key-open { min-height: 44px; }
+.answer-key-review { padding-top: 24px; border-top: 1px solid var(--app-line); }
+.answer-key-review-list { display: grid; gap: 12px; }
+.answer-key-review-card { min-width: 0; padding: 15px; border: 1px solid #e5e7d9; border-radius: 13px; background: #fcfcf8; }
+.answer-key-entry-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.answer-key-entry-head strong { color: #344d42; font-size: 14px; line-height: 1.45; }
+.answer-key-entry-head .tag { flex: 0 0 auto; }
+.answer-key-review-card > .caption { margin: 6px 0; }
+.answer-key-note, .answer-key-no-match { margin: 10px 0; padding: 10px 12px; border-radius: 9px; color: #705e38; background: #fbf7e9; font-size: 13px; line-height: 1.5; }
+.answer-key-source-link { display: inline-flex; min-height: 44px; align-items: center; gap: 7px; }
+.answer-key-target { margin: 10px 0; max-width: 480px; }
+.answer-key-match { margin-top: 10px; padding: 12px; border-radius: 10px; background: #f5f7f1; }
+.answer-key-match > strong { color: #425b4f; font-size: 13px; }
+.answer-key-match > p { max-height: 5.4em; overflow: auto; margin: 8px 0 12px; color: #33433b; font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
+.answer-key-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.answer-key-option { display: flex; min-width: 0; min-height: 44px; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid #e0e6dc; border-radius: 9px; background: #fff; color: #49594f; font-size: 13px; line-height: 1.4; overflow-wrap: anywhere; }
+.answer-key-option input, .answer-key-replace input { flex: 0 0 auto; accent-color: #426d5c; }
+.answer-key-replace { display: flex; min-height: 44px; align-items: center; gap: 8px; margin-top: 10px; color: #765834; font-size: 13px; }
+.answer-key-review-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.answer-key-empty { color: #75847c; font-size: 13px; }
+
+@media (max-width: 760px) {
+  .answer-key-upload-form { grid-template-columns: minmax(0, 1fr); }
+  .answer-key-file-row { grid-template-columns: 20px minmax(0, 1fr); }
+  .answer-key-file-row > .tag, .answer-key-open { grid-column: 2; justify-self: start; }
+  .answer-key-entry-head { flex-direction: column; }
+  .answer-key-options { grid-template-columns: minmax(0, 1fr); }
+}
