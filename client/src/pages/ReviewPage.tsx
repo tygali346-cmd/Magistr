@@ -57,7 +57,7 @@ export default function ReviewPage() {
       <section className="review-bulk-approve" aria-label="95 faiz və daha yüksək əminlikli sualları toplu təsdiq et">
         <div className="review-bulk-copy">
           <strong>Yüksək əminlikli təsnifat</strong>
-          <p>Yalnız yoxlanışda olan və fənn/mövzusu seçilmiş suallardan əminliyi 95% və yuxarı olanları “Yoxlanılıb” kimi işarələyir. Cavab açarı və sualın mətni dəyişmir.</p>
+          <p>Yalnız yoxlanış qeydi boş olan, ili və nömrəsi məlum, ən azı bir variantı olan, fənni və əsas mövzusu seçilmiş suallardan əminliyi 95% və yuxarı olanları “Yoxlanılıb” kimi işarələyir. Cavab açarı və sualın mətni dəyişmir.</p>
           <span className="caption" role="status">{highConfidenceCountQuery.isLoading ? "Uyğun suallar sayılır…" : highConfidenceCountQuery.isError ? "Say hesablana bilmədi — yenidən yükləyin." : `${highConfidenceCountQuery.data ?? 0} uyğun sual`}</span>
         </div>
         <button className="btn btn-primary" onClick={approveHighConfidenceQuestions} disabled={highConfidenceCountQuery.isLoading || highConfidenceCountQuery.isError || !highConfidenceCountQuery.data || bulkApproveMutation.isPending}>

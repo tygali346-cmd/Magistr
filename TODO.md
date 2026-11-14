@@ -59,7 +59,8 @@
 - [x] Sualın orijinal mətni dəyişdirilməməlidir. OCR zamanı yaranan səhvlər aşkarlanarsa, düzəliş təklif edilməli və orijinal mənbə ilə müqayisə imkanı saxlanmalıdır.
 - [x] Şəkildən asılı olan suallarda şəkil mütləq qorunmalıdır. Şəkil çıxarıla bilmirsə, həmin sual itirilməməli, yoxlanış üçün işarələnməlidir.
 - [x] Yükləmə interfeysi hər PDF üçün gözlənilən sual sayını istəyə bağlı qəbul edir; çıxarış sayı bu göstərici ilə uyğun gəlmirsə və ya AI tamlığı təsdiqləmirsə, nəticə yoxlanış üçün işarələnir.
-- [x] Sual çıxmayan fayl uğurlu kimi göstərilmir; uğursuz PDF arxivdən yenidən emal edilə bilər.
+- [x] Sual çıxmayan fayl uğurlu kimi göstərilmir; PDF `failed`, `uploaded`, `completed` və ya `needs_review` olduqda admin onu yenidən emal edə bilər. Təkrar emal mövcud sual qeydlərini dəyişmir, yalnız çatışmayanları əlavə edir.
+- [x] Admin imtahan PDF mənbəyini və yalnız həmin fayla aid sualları tranzaksiyada bazadan silə bilər; əl ilə əlavə edilmiş sualların mənbəsi qorunur və storage-dakı PDF obyekti silinmir.
 
 ## 3. AI təsnifatı, düzəliş və təkrarın qarşısının alınması
 
@@ -170,12 +171,13 @@
 
 ## 14. Yüksək əminlikli sualların toplu təsdiqi
 
-- [x] Yoxlanış səhifəsində admin, ən azı 95% mövzu təsnifatı əminliyi olan gözləyən sualların sayını görə bilməlidir.
-- [x] Bir düymə ilə yalnız `needs_review` statusunda, təsnifat confidence-i `0.95` və yuxarı, fənni və əsas mövzusu təyin edilmiş suallar `checked` kimi işarələnməlidir.
+- [x] Yoxlanış səhifəsində admin yalnız `reviewNote`-u boş olan, ili/nömrəsi məlum, ən azı bir variantı, təyin edilmiş fənni və əsas mövzusu olan `needs_review` suallar içindən confidence-i `0.95` və yuxarı olanların sayını görə bilməlidir.
+- [x] Bir düymə ilə yalnız yuxarıdakı eyni şərtlərə uyğun suallar `checked` kimi işarələnməlidir; say və təsdiq query-ləri ortaq şərt işlətməlidir.
 - [x] Toplu təsdiqləmə sualın mətnini, mövzu təyinatını və cavab açarını dəyişməməli; yalnız yoxlanış statusunu dəyişməlidir.
 - [x] Say serverdən hesablanmalı, əməliyyat admin identifikasiyası ilə qorunmalı və təsdiq zamanı say dəyişibsə köhnə say əsasında əməliyyat aparılmamalıdır.
+- [x] `uncertain=true` olan yeni idxal sualında `reviewNote` boş qalmamalı; qeyddə yoxlanış səbəbi göstərilməlidir.
 
-Yekun yoxlama: TypeScript yoxlaması, 22 regression testi və production build keçdi. Canlı admin sessiyası ilə düymənin vizual click-through testi aparılmadı.
+Yekun yoxlama: `pnpm check` keçdi; `pnpm test` — 7 faylda 34 test keçdi; `pnpm build` keçdi. Bu checkout-da DB bağlantısı və canlı admin sessiyası olmadığı üçün high-confidence sayının əvvəlki/sonrakı rəqəmləri oxunmadı; toplu təsdiq əməliyyatı başladılmadı.
 
 ## 15. Answer-key PDF importu və təhlükəsiz uyğunlaşdırma
 
@@ -185,3 +187,9 @@ Yekun yoxlama: TypeScript yoxlaması, 22 regression testi və production build k
 - [ ] İl/sual nömrəsi çatışmayan, AI əminliyi 95%-dən aşağı, variant işarəsi uyğun olmayan, birdən çox sualla uyğun gələn və ya mövcud cavab açarı ilə ziddiyyət yaradan sətirlər avtomatik tətbiq edilməməli, ayrıca admin yoxlanışında göstərilməlidir.
 - [ ] Cavab açarı PDF-i, orijinal fayl adı və səhifə istinadı məlumat bazasında saxlanmalı; təsdiqlənmiş cavabda etibarlı mənbə kimi görünməlidir.
 - [ ] Bu import və cavab təsdiqi yalnız konfiqurasiya olunmuş admin üçün açıq olmalı; cavab açarı public API-dən sızmamalı və test bitənədək gizli qalmalıdır.
+
+## 16. Cavab açarının test tamamlanana qədər gizli qalması
+
+- [ ] Test başlayanda server həmin testin tam sual siyahısına bağlı, müddəti bitən server sessiyası yaratmalıdır.
+- [ ] Nəticə endpoint-i yalnız həmin sessiyaya aid bütün suallar cavablandırılıb test bitdikdə cavab açarını qaytarmalı; sessiyasız, natamam, təkrar istifadə edilmiş və ya başqa suallı cəhd rədd edilməlidir.
+- [ ] Public sual və test API-ləri test başlamazdan və bitməzdən əvvəl nə düzgün variantı, nə də cavab açarının mövcudluğu barədə məlumatı açıqlamalıdır.

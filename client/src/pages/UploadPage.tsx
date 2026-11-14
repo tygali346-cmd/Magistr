@@ -16,6 +16,7 @@ export default function UploadPage() {
   const [dragging, setDragging] = useState(false);
   const [working, setWorking] = useState(false);
   const [uploadError, setUploadError] = useState("");
+  const [archiveNotice, setArchiveNotice] = useState("");
   const [manualOpen, setManualOpen] = useState(false);
   const [subjectSlug, setSubjectSlug] = useState<"informatika" | "mentiq">("informatika");
   const [topicSlug, setTopicSlug] = useState("");
@@ -35,6 +36,7 @@ export default function UploadPage() {
   const utils = trpc.useUtils();
   const manualMutation = trpc.questionBank.manualQuestion.useMutation();
   const retryMutation = trpc.questionBank.retryImport.useMutation();
+  const deleteMutation = trpc.questionBank.deleteExamFile.useMutation();
   const backupQuery = trpc.questionBank.exportBackup.useQuery(undefined, { enabled: false, retry: false });
   const years = yearsText.split(/[\s,;]+/).map(part => Number(part)).filter(value => Number.isInteger(value) && value >= 1900 && value <= 2100);
 
@@ -112,6 +114,27 @@ export default function UploadPage() {
     }
   }
 
+  async function deleteFile(examFileId: number, questionCount: number) {
+    const confirmed = window.confirm(`PDF mənbəyi və ona aid ${questionCount} sual silinəcək. Yalnız bazadakı qeydlər silinəcək; storage-dakı PDF faylı saxlanacaq. Davam edilsin?`);
+    if (!confirmed) return;
+    setUploadError("");
+    setArchiveNotice("");
+    try {
+      const result = await deleteMutation.mutateAsync({ examFileId });
+      setArchiveNotice(`${result.deletedQuestionCount} sual və PDF mənbəyi silindi. Storage faylı saxlanıldı.`);
+      await Promise.all([
+        examsQuery.refetch(),
+        utils.questionBank.dashboard.invalidate(),
+        utils.questionBank.reviewQueue.invalidate(),
+        utils.questionBank.questions.invalidate(),
+        utils.questionBank.topics.invalidate(),
+        utils.questionBank.subjects.invalidate(),
+      ]);
+    } catch (error) {
+      setUploadError(errorMessage(error, "PDF mənbəyini silmək alınmadı."));
+    }
+  }
+
   async function addManualQuestion(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setManualMessage("");
@@ -165,11 +188,12 @@ export default function UploadPage() {
 
       <section className="card card-pad" style={{ marginTop: 16 }}>
         <div className="section-title-row"><div><h2>Arxivdəki imtahanlar</h2><p>Orijinal PDF mənbələri və emal vəziyyəti</p></div><Archive size={17} color="#719284" /></div>
+        {archiveNotice && <div className="notice-box" style={{ marginBottom: 12 }}>{archiveNotice}</div>}
         {examsQuery.isLoading && <div className="loading-state">Arxiv yüklənir…</div>}
         {examsQuery.isError && <div className="error-box">{errorMessage(examsQuery.error)} <button className="btn btn-secondary" onClick={() => examsQuery.refetch()}>Yenidən yoxla</button></div>}
         {!examsQuery.isLoading && examsQuery.data?.length === 0 && <div className="empty-state"><div className="empty-icon"><FileText size={17} /></div><h3>PDF mənbəyi yoxdur</h3><p>İlk imtahan faylını yükləyin; mənbə sənədlər bu siyahıda qalacaq.</p></div>}
         {uploadError && <div className="error-box" style={{ marginTop: 12 }}>{uploadError}</div>}
-        <div className="upload-jobs">{examsQuery.data?.map(file => <div className="card upload-job" key={file.id}><div><h3>{file.title}</h3><p>{file.years?.length ? file.years.join(" · ") : file.mimeType === "application/pdf" ? "İl göstərilməyib" : "Əl ilə əlavə olunan suallar"} · {file.questionCount} sual{file.expectedQuestionCount ? ` / gözlənilən ${file.expectedQuestionCount}` : ""} · {formatBytes(file.fileSize)}</p><div className="upload-job-meta"><span className={`tag${file.processingStatus === "needs_review" ? " warning" : file.processingStatus === "completed" ? " success" : ""}`}>{statusLabel(file.processingStatus)}</span><span className="caption">{formatDate(file.createdAt)}</span>{file.sourceUrl && !file.sourceUrl.startsWith("manual://") && <a href={file.sourceUrl} target="_blank" rel="noreferrer" className="file-row-link"><FileText size={12} /> PDF-i aç</a>}{(file.processingStatus === "failed" || file.processingStatus === "uploaded") && <button className="btn btn-secondary" disabled={retryMutation.isPending} onClick={() => void retryFile(file.id)}><RotateCcw size={12} /> {retryMutation.isPending ? "Yenidən işlənir…" : "Yenidən emal et"}</button>}</div></div><span className="tag">{file.filename}</span></div>)}</div>
+        <div className="upload-jobs">{examsQuery.data?.map(file => <div className="card upload-job" key={file.id}><div><h3>{file.title}</h3><p>{file.years?.length ? file.years.join(" · ") : file.mimeType === "application/pdf" ? "İl göstərilməyib" : "Əl ilə əlavə olunan suallar"} · {file.questionCount} sual{file.expectedQuestionCount ? ` / gözlənilən ${file.expectedQuestionCount}` : ""} · {formatBytes(file.fileSize)}</p><div className="upload-job-meta"><span className={`tag${file.processingStatus === "needs_review" ? " warning" : file.processingStatus === "completed" ? " success" : ""}`}>{statusLabel(file.processingStatus)}</span><span className="caption">{formatDate(file.createdAt)}</span>{file.sourceUrl && !file.sourceUrl.startsWith("manual://") && <a href={file.sourceUrl} target="_blank" rel="noreferrer" className="file-row-link"><FileText size={12} /> PDF-i aç</a>}{["failed", "uploaded", "completed", "needs_review"].includes(file.processingStatus) && <button className="btn btn-secondary" disabled={retryMutation.isPending} onClick={() => void retryFile(file.id)}><RotateCcw size={12} /> {retryMutation.isPending ? "Yenidən işlənir…" : "Yenidən emal et"}</button>}{file.mimeType === "application/pdf" && <button className="btn btn-secondary" disabled={deleteMutation.isPending} onClick={() => void deleteFile(file.id, file.questionCount)}><X size={12} /> {deleteMutation.isPending ? "Silinir…" : "Faylı sil"}</button>}</div></div><span className="tag">{file.filename}</span></div>)}</div>
       </section>
 
       <AnswerKeyImportPanel />

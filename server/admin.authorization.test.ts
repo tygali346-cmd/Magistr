@@ -49,4 +49,15 @@ describe("admin authorization", () => {
     await expect(caller.answerKeys.approveEntry({ entryId: 1, questionId: 1, correctOption: "A", expectedCurrentOption: null, replaceExisting: false })).rejects.toMatchObject({ code: "FORBIDDEN" });
     await expect(caller.answerKeys.dismissEntry({ entryId: 1 })).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
+
+  it("protects PDF retry and deletion endpoints", async () => {
+    const caller = appRouter.createCaller(staleAdminContext);
+
+    await expect(caller.questionBank.retryImport({ examFileId: 1 })).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    await expect(caller.questionBank.deleteExamFile({ examFileId: 1 })).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+  });
 });

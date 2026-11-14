@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { and, count, desc, eq, gte, inArray, isNotNull, sql } from "drizzle-orm";
+import { and, count, desc, eq, gte, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { SUBJECT_CATALOG, TOPIC_CATALOG, type SubjectSlug } from "@shared/topicCatalog";
@@ -34,6 +34,10 @@ function highConfidenceReviewCondition() {
     gte(questions.classificationConfidence, HIGH_CONFIDENCE_REVIEW_THRESHOLD),
     isNotNull(questions.subjectId),
     isNotNull(questions.topicId),
+    isNotNull(questions.examYear),
+    isNotNull(questions.questionNumber),
+    or(isNull(questions.reviewNote), sql`trim(${questions.reviewNote}) = ''`)!,
+    sql`exists (select 1 from ${questionOptions} where ${questionOptions.questionId} = ${questions.id})`,
   )!;
 }
 
@@ -115,14 +119,42 @@ function sha256(value: string | Buffer) {
 function normalize(value: string) {
   return value.normalize("NFKC").toLocaleLowerCase("az").replace(/\s+/g, " ").trim();
 }
-function inferYears(filename: string) {
-  const range = filename.match(/\b(19|20)(\d{2})[-_](\d{2})\b/);
+export function inferYears(filename: string) {
+  const range = filename.match(/(?<!\d)(19|20)(\d{2})[-_](\d{2})(?!\d)/);
   if (range) {
     const first = Number(`${range[1]}${range[2]}`);
     const end = Number(`${range[1]}${range[3]}`);
-    if (end >= first && end <= first + 10) return [first, end];
+    if (end >= first && end <= first + 10) return Array.from({ length: end - first + 1 }, (_, index) => first + index);
   }
-  return [...new Set([...filename.matchAll(/\b(?:19|20)\d{2}\b/g)].map(match => Number(match[0])))].filter(year => year >= 1900 && year <= 2100).slice(0, 10);
+  return [...new Set([...filename.matchAll(/(?<!\d)(?:19|20)\d{2}(?!\d)/g)].map(match => Number(match[0])))].filter(year => year >= 1900 && year <= 2100).slice(0, 10);
+}
+
+export function planSourceFingerprints(fileSha: string, fileYears: number[], imported: Pick<ImportQuestion, "examYear" | "questionNumber" | "subjectSlug">[]) {
+  const occurrences = new Map<string, number>();
+  return imported.map((item, index) => {
+    const year = fileYears.length === 1 ? fileYears[0] : item.examYear;
+    const base = `${fileSha.slice(0, 50)}:${year ?? "na"}:${item.questionNumber ?? `x${index + 1}`}`.slice(0, 96);
+    const occurrence = occurrences.get(base) ?? 0;
+    occurrences.set(base, occurrence + 1);
+    if (occurrence === 0) return { year, sourceFingerprint: base, collision: false };
+    const suffix = occurrence === 1 ? item.subjectSlug || "unknown" : `dup${occurrence}`;
+    return {
+      year,
+      sourceFingerprint: `${base.slice(0, 96 - suffix.length - 1)}:${suffix}`,
+      collision: true,
+    };
+  });
+}
+
+export function completenessWarnings(completeness: ExtractionResult["completeness"]) {
+  const warnings: string[] = [];
+  if (!completeness.likelyComplete) {
+    warnings.push(completeness.note.trim() || "AI sualların tam çıxarıldığını təsdiqləyə bilmədi.");
+  }
+  if (completeness.suspectedMissingQuestionNumbers.length) {
+    warnings.push(`Buraxılmış ola bilən nömrələr: ${completeness.suspectedMissingQuestionNumbers.join(", ")}.`);
+  }
+  return warnings;
 }
 
 async function ensureTopicCatalog() {
@@ -242,6 +274,7 @@ async function persistExtractedQuestions(examFileId: number, fileSha: string, fi
   const db = await requireDatabase();
   let inserted = 0;
   let needsReview = 0;
+  const fingerprints = planSourceFingerprints(fileSha, fileYears, imported);
   for (const [index, item] of imported.entries()) {
     const subjectSlug = item.subjectSlug as SubjectSlug | null;
     const subject = subjectSlug ? await getSubjectBySlug(subjectSlug) : null;
@@ -249,23 +282,30 @@ async function persistExtractedQuestions(examFileId: number, fileSha: string, fi
     const mainTopic = resolvedTopic.primarySlug ? await getTopicBySlug(resolvedTopic.primarySlug) : null;
     const subtopic = resolvedTopic.subtopicSlug ? await getTopicBySlug(resolvedTopic.subtopicSlug) : null;
     const yearMismatch = item.examYear !== null && fileYears.length > 0 && !fileYears.includes(item.examYear);
-    const year = fileYears.length === 1 ? fileYears[0] : item.examYear;
+    const { year, sourceFingerprint, collision } = fingerprints[index];
     const itemWarnings = [...extractionWarnings, ...(yearMismatch ? [`AI tərəfindən təyin edilən ${item.examYear} ili PDF üçün verilmiş il göstəricisinə (${fileYears.join(", ")}) uyğun gəlmir.`] : [])];
     const questionText = item.questionText.trim();
     const options = item.options.map(option => ({ label: option.label.trim(), text: option.text.trim() })).filter(option => option.label && option.text);
     const contentFingerprint = sha256([questionText, ...options.map(option => `${option.label}:${option.text}`)].map(normalize).join("\n") || `empty-${fileSha}-${index}`);
-    const sourceFingerprint = `${fileSha.slice(0, 50)}:${year ?? "na"}:${item.questionNumber ?? `x${index + 1}`}`.slice(0, 96);
     const [sameSource] = await db.select({ id: questions.id }).from(questions).where(eq(questions.sourceFingerprint, sourceFingerprint)).limit(1);
-    if (sameSource) {
-      if (itemWarnings.length) {
-        const [existing] = await db.select({ reviewNote: questions.reviewNote }).from(questions).where(eq(questions.id, sameSource.id)).limit(1);
-        await db.update(questions).set({ reviewStatus: "needs_review", reviewNote: [existing?.reviewNote, ...itemWarnings].filter(Boolean).join(" · ").slice(0, 2000) }).where(eq(questions.id, sameSource.id));
-      }
-      continue;
-    }
+    if (sameSource) continue;
     const [sameContent] = await db.select({ id: questions.id }).from(questions).where(eq(questions.contentFingerprint, contentFingerprint)).limit(1);
-    const uncertain = !questionText || !subject || !mainTopic || item.confidence < REVIEW_THRESHOLD || !year || !item.questionNumber || !options.length || !!item.reviewNote.trim() || !!sameContent || (!!item.subtopicNumber && !subtopic) || itemWarnings.length > 0;
-    const reviewNote = [item.reviewNote.trim(), ...itemWarnings, sameContent ? `Mümkün təkrar: ${sameContent.id}` : ""].filter(Boolean).join(" · ").slice(0, 2000) || null;
+    const reviewReasons = [
+      item.reviewNote.trim(),
+      ...itemWarnings,
+      !questionText ? "Sual mətni boşdur." : "",
+      !subject ? "Fənn müəyyən edilməyib." : "",
+      !mainTopic ? "Əsas mövzu müəyyən edilməyib." : "",
+      item.confidence < REVIEW_THRESHOLD ? "Təsnifat əminliyi aşağıdır." : "",
+      !year ? "İmtahan ili müəyyən edilməyib." : "",
+      !item.questionNumber ? "Sual nömrəsi müəyyən edilməyib." : "",
+      !options.length ? "Cavab variantı yoxdur." : "",
+      sameContent ? `Mümkün təkrar: ${sameContent.id}` : "",
+      item.subtopicNumber && !subtopic ? "Alt mövzu kataloqda tapılmadı." : "",
+      collision ? "il/nömrə toqquşması" : "",
+    ].filter(Boolean);
+    const uncertain = reviewReasons.length > 0;
+    const reviewNote = reviewReasons.join(" · ").slice(0, 2000) || null;
     const media: QuestionMedia[] = item.media.map(entry => ({ kind: entry.kind, ...(entry.label ? { label: entry.label } : {}), value: entry.value, ...(entry.sourcePage ? { sourcePage: entry.sourcePage } : {}) }));
     const labels = new Set<string>();
     const finalOptions = options.map((option, optionIndex) => {
@@ -325,13 +365,7 @@ async function runImport(examFileId: number) {
     const extraction = await extractQuestionsFromPdf(pdfBytes, file.filename, file.years ?? [], file.expectedQuestionCount);
     const extracted = extraction.questions;
     if (!extracted.length) throw new Error("PDF-dən heç bir sual çıxarılmadı; fayl uğursuz kimi saxlanıldı və yenidən emal edilə bilər.");
-    const extractionWarnings: string[] = [];
-    if (!extraction.completeness.likelyComplete || extraction.completeness.note.trim()) {
-      extractionWarnings.push(extraction.completeness.note.trim() || "AI sualların tam çıxarıldığını təsdiqləyə bilmədi.");
-    }
-    if (extraction.completeness.suspectedMissingQuestionNumbers.length) {
-      extractionWarnings.push(`Buraxılmış ola bilən nömrələr: ${extraction.completeness.suspectedMissingQuestionNumbers.join(", ")}.`);
-    }
+    const extractionWarnings = completenessWarnings(extraction.completeness);
     if (file.expectedQuestionCount !== null && file.expectedQuestionCount !== extracted.length) {
       extractionWarnings.push(`Gözlənilən ${file.expectedQuestionCount} sualdan ${extracted.length} sual çıxarıldı.`);
     }
@@ -436,8 +470,23 @@ export const questionBankRouter = router({
   retryImport: adminProcedure.input(z.object({ examFileId: z.number().int().positive() })).mutation(async ({ input }) => {
     const file = await getExamFileById(input.examFileId);
     if (!file) throw new TRPCError({ code: "NOT_FOUND", message: "PDF mənbəyi tapılmadı." });
-    if (file.processingStatus !== "failed" && file.processingStatus !== "uploaded") throw new TRPCError({ code: "CONFLICT", message: "Yalnız uğursuz və ya hələ işlənməmiş PDF yenidən emal edilə bilər." });
+    if (!["failed", "uploaded", "completed", "needs_review"].includes(file.processingStatus)) throw new TRPCError({ code: "CONFLICT", message: "Bu PDF hazırda emal olunur və yenidən başladılmış hesab edilmir." });
     return runImport(file.id);
+  }),
+  deleteExamFile: adminProcedure.input(z.object({ examFileId: z.number().int().positive() })).mutation(async ({ input }) => {
+    const db = await requireDatabase();
+    return db.transaction(async tx => {
+      const [file] = await tx.select({ id: examFiles.id, mimeType: examFiles.mimeType, sourceUrl: examFiles.sourceUrl }).from(examFiles).where(eq(examFiles.id, input.examFileId)).limit(1);
+      if (!file) throw new TRPCError({ code: "NOT_FOUND", message: "PDF mənbəyi tapılmadı." });
+      if (file.mimeType !== "application/pdf" || file.sourceUrl.startsWith("manual://")) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Əl ilə əlavə edilmiş sualların mənbəyi silinə bilməz." });
+      }
+      const [result] = await tx.select({ value: count() }).from(questions).where(eq(questions.examFileId, file.id));
+      const deletedQuestionCount = result?.value ?? 0;
+      await tx.delete(questions).where(eq(questions.examFileId, file.id));
+      await tx.delete(examFiles).where(eq(examFiles.id, file.id));
+      return { deletedQuestionCount };
+    });
   }),
   attempts: publicProcedure.input(z.object({ learnerKey: z.string().min(16).max(64), limit: z.number().int().min(1).max(100).optional() })).query(({ input }) => getLearnerAttempts(input.learnerKey, input.limit)),
   saveAttempt: publicProcedure.input(z.object({

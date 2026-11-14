@@ -15,7 +15,8 @@ The first database migration is already applied to the managed MySQL database. Q
 
 - Dashboard, subject/topic browsing, year/subtopic/question-number filters, and source-linked question pages.
 - Sequential topic practice. Unknown answer keys are not guessed; only source-verified keys are scored.
-- PDF archive with multi-file upload, filename/year metadata, user-triggered AI extraction, duplicate checks, review queue, manual question entry, and JSON backup export.
+- PDF archive with multi-file upload, filename/year metadata, user-triggered AI extraction, duplicate checks, review queue, manual question entry, JSON backup export, and admin reprocessing/deletion of PDF records. Reprocessing preserves existing question rows; deletion removes only database records for that PDF and its questions, not the stored PDF object or the manual-question source.
+- High-confidence bulk review applies only to `needs_review` questions with no review note, a known year and number, at least one option, and an assigned subject and main topic.
 - Original question text is kept separate from OCR correction suggestions. Uncertain text or classification stays in review instead of being silently changed.
 
 Future PDF AI imports use the project’s built-in vision-capable model and consume project credits. A 50 MB per-file limit is enforced. The seed contains no answer key; all 50 questions therefore begin unscored. Four source/classification records are flagged for review: 2010 Q22 and 2011 Q1/Q7 have unapproved subtopic suggestions, and 2011 Q5 has an unclear printed word.
