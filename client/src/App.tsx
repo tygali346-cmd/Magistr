@@ -4,6 +4,7 @@ import NotFound from "@/pages/NotFound";
 import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
+import AdminGate from "./components/AdminGate";
 import DashboardPage from "./pages/DashboardPage";
 import SubjectPage from "./pages/SubjectPage";
 import TopicPage from "./pages/TopicPage";
@@ -11,6 +12,14 @@ import QuestionPage from "./pages/QuestionPage";
 import PracticePage from "./pages/PracticePage";
 import UploadPage from "./pages/UploadPage";
 import ReviewPage from "./pages/ReviewPage";
+
+function AdminUploadPage() {
+  return <AdminGate><UploadPage /></AdminGate>;
+}
+
+function AdminReviewPage() {
+  return <AdminGate><ReviewPage /></AdminGate>;
+}
 
 function Router() {
   return (
@@ -20,8 +29,8 @@ function Router() {
       <Route path="/subjects/:subjectSlug/topics/:topicSlug" component={TopicPage} />
       <Route path="/questions/:questionId" component={QuestionPage} />
       <Route path="/tests/:topicSlug" component={PracticePage} />
-      <Route path="/uploads" component={UploadPage} />
-      <Route path="/review" component={ReviewPage} />
+      <Route path="/uploads" component={AdminUploadPage} />
+      <Route path="/review" component={AdminReviewPage} />
       <Route path="/404" component={NotFound} />
       <Route component={NotFound} />
     </Switch>

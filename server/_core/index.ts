@@ -7,6 +7,9 @@ import { publicPlatformScript } from "./publicConfig";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
+import { sdk } from "./sdk";
+import { isAuthorizedAdmin } from "./adminIdentity";
+import { ENV } from "./env";
 import { ensureTopicCatalog, handlePdfUploadRequest } from "../questionBank";
 
 async function startServer() {
@@ -17,7 +20,22 @@ async function startServer() {
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
   app.get("/api/health", (_req, res) => res.json({ status: "ok" }));
-  app.post("/api/import/pdf", express.raw({ type: "application/pdf", limit: "50mb" }), async (req, res) => {
+  const requireAdminPdfUpload: express.RequestHandler = async (req, res, next) => {
+    try {
+      const user = await sdk.authenticateRequest(req);
+      if (!isAuthorizedAdmin(user, {
+        ownerOpenId: ENV.ownerOpenId,
+        adminEmail: ENV.qebulfitAdminEmail,
+      })) {
+        res.status(403).json({ error: "PDF yükləmək üçün admin icazəsi tələb olunur." });
+        return;
+      }
+      next();
+    } catch {
+      res.status(401).json({ error: "PDF yükləmək üçün Manus hesabı ilə admin kimi daxil olun." });
+    }
+  };
+  app.post("/api/import/pdf", requireAdminPdfUpload, express.raw({ type: "application/pdf", limit: "50mb" }), async (req, res) => {
     if (!Buffer.isBuffer(req.body)) {
       res.status(400).json({ error: "PDF məzmunu tapılmadı." });
       return;

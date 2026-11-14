@@ -154,3 +154,16 @@
 - [x] Uzun və bitişik mətn kart sərhədindən və ekran enindən kənara çıxmamalıdır; il və mövzu metadatası sətirə keçə bilməlidir.
 - [x] Sual məzmunu, nömrələr və imtahan ili dəyişdirilməməlidir.
 - [x] 375px enində mobil görünüşdə üfüqi daşma olmamalı və siyahı kartları düzgün düzülməlidir.
+
+
+## 13. Gemini emalı və idarəetmə əməliyyatları yalnız admin üçün
+
+- [x] İstifadəçi seçimi: “Yalnız mən/admin istifadə etsin — əvvəl giriş qoruması əlavə et (tövsiyə olunur).”
+- [x] Public ziyarətçilər suallara baxa və testləri həll edə bilər; PDF yükləmə, AI emalı və yenidən emal, əl ilə sual əlavə etmə, yoxlanış və cavab açarının dəyişdirilməsi yalnız admin üçün əlçatan olmalıdır.
+- [x] İcazə server tərəfində yoxlanmalıdır; yalnız düymə və marşrutları gizlətmək kifayət deyil. Manus OAuth identifikasiyası və admin rolu istifadə edilməlidir.
+- [x] API açarı yalnız server mühitində saxlanmalı, brauzerə, kod deposuna və loglara çıxmamalıdır. Gemini API açarı istifadəçinin təhlükəsiz giriş kartı ilə verilməlidir.
+- [x] Admin hesabı yalnız təhlükəsiz konfiqurasiya edilmiş Manus hesabı ilə uyğun gələndə admin sayılmalıdır; admin e-poçtu mənbə koduna yazılmamalıdır.
+- [x] PDF məzmunu Gemini 3.8 Flash ilə OCR/təsnifat üçün Google-a göndərilməlidir; qeyri-müəyyən suallar və etibarsız cavab açarları əvvəlki qaydada yoxlanış üçün saxlanmalıdır.
+- [x] Gemini-yə yüklənmiş müvəqqəti PDF emaldan sonra silinməlidir; Gemini açarı və ya admin identifikatoru yoxdursa, emal və idarəetmə əməliyyatları uğursuz şəkildə açıq yox, bağlı qalmalıdır.
+- [x] Protected Preview-də `/uploads` giriş ekranı və icazəsiz PDF upload üçün HTTP 401 yoxlanıldı; admin identity matcher və tRPC admin proseduru regression test-ləri keçdi.
+- [ ] İlk admin Manus sessiyası ilə giriş edib, nümunə PDF-i Gemini-də emal etdir və nəticəni yoxlanış növbəsində təsdiqlə. Bu yoxlamada authenticated admin sessiyası olmadığı üçün real PDF Google-a göndərilmədi.

@@ -1,0 +1,5 @@
+.admin-gate { width: min(100%, 560px); margin: clamp(20px, 5vh, 52px) auto; display: grid; justify-items: start; gap: 12px; }
+.admin-gate-icon { width: 44px; height: 44px; display: grid; place-items: center; border-radius: 13px; color: var(--app-teal); background: var(--app-soft-teal); }
+.admin-gate h2 { margin: 0; color: var(--app-ink); font: 700 21px/1.25 "DM Sans", "Noto Sans", sans-serif; }
+.admin-gate p { max-width: 52ch; margin: 0 0 6px; color: var(--app-muted); font-size: 14px; line-height: 1.65; overflow-wrap: anywhere; }
+.admin-gate .btn { min-height: 44px; }

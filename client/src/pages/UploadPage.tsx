@@ -146,7 +146,7 @@ export default function UploadPage() {
 
   return (
     <AppShell title="PDF arxivi" eyebrow="MƏNBƏLƏR · İDXAL VƏ EHTİYAT NÜSXƏSİ" actions={<button className="btn btn-secondary" onClick={downloadBackup} disabled={exporting}><ArrowDownToLine size={14} /> {exporting ? "Hazırlanır…" : "JSON ehtiyat nüsxəsi"}</button>}>
-      <div className="notice-box" style={{ marginBottom: 15 }}><ShieldAlert size={14} style={{ display: "inline", verticalAlign: "-3px", marginRight: 5 }} /><strong>AI emalı yalnız siz başladanda işləyir.</strong> İdxal Manus layihə kreditlərindən istifadə edə bilər. Sistem sualları və mövzuları çıxarır, düzgün cavab uydurmur; qeyri-müəyyən qeydlər yoxlanış siyahısında qalır.</div>
+      <div className="notice-box" style={{ marginBottom: 15 }}><ShieldAlert size={14} style={{ display: "inline", verticalAlign: "-3px", marginRight: 5 }} /><strong>Gemini emalını yalnız admin başladır.</strong> Təhlil üçün PDF Google-a göndərilir; emal tamamlandıqdan sonra müvəqqəti Gemini faylı silinir. Sorğular konfiqurasiya edilmiş Google Gemini API açarının kvotasından istifadə edir. Sistem sualları və mövzuları çıxarır, düzgün cavab uydurmur; qeyri-müəyyən qeydlər yoxlanış siyahısında qalır.</div>
       <div className="upload-box">
         <label className={`drop-zone${dragging ? " dragging" : ""}`} onDragOver={event => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={event => { event.preventDefault(); setDragging(false); addFiles(event.dataTransfer.files); }}>
           <input ref={inputRef} type="file" accept="application/pdf,.pdf" multiple onChange={event => { if (event.target.files) addFiles(event.target.files); event.target.value = ""; }} />

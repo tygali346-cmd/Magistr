@@ -5,8 +5,8 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { SUBJECT_CATALOG, TOPIC_CATALOG, type SubjectSlug } from "@shared/topicCatalog";
 import { examFiles, importJobs, questionOptions, questions, studyAttempts, subjects, topics, type AttemptAnswer, type QuestionMedia } from "../drizzle/schema";
-import { invokeLLM, listLLMModels, type Message } from "./_core/llm";
-import { publicProcedure, router } from "./_core/trpc";
+import { extractPdfWithGemini } from "./gemini";
+import { adminProcedure, publicProcedure, router } from "./_core/trpc";
 import { storageGetSignedUrl, storagePut } from "./storage";
 import {
   getDashboardData,
@@ -24,7 +24,6 @@ import {
   updateExamFileState,
 } from "./questionBankDb";
 
-const AI_MODEL = "gpt-6.1-sol";
 const REVIEW_THRESHOLD = 0.75;
 const MAX_PDF_BYTES = 50 * 1024 * 1024;
 
@@ -164,14 +163,6 @@ export async function storeUploadedPdf(bytes: Buffer, filenameInput: string, req
   return { examFileId: created.id, duplicate: false, filename: created.filename, processingStatus: created.processingStatus, expectedQuestionCount: created.expectedQuestionCount };
 }
 
-function extractText(response: unknown) {
-  const body = response as { error?: { message?: string }; choices?: { message?: { content?: unknown } }[] };
-  if (body.error) throw new Error(body.error.message || "AI xidmətindən xəta cavabı gəldi.");
-  const content = body.choices?.[0]?.message?.content;
-  if (typeof content === "string") return content.trim();
-  if (Array.isArray(content)) return content.map(part => typeof part === "object" && part && "text" in part ? String(part.text) : "").join("\n").trim();
-  return "";
-}
 function parseModelJson(text: string) {
   const cleaned = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
   try { return JSON.parse(cleaned); } catch {
@@ -182,9 +173,7 @@ function parseModelJson(text: string) {
   }
 }
 
-async function extractQuestionsFromPdf(signedUrl: string, filename: string, years: number[], expectedQuestionCount: number | null) {
-  const models = await listLLMModels();
-  if (!models.data.some(model => model.id === AI_MODEL)) throw new Error(`Tələb olunan AI modeli mövcud deyil: ${AI_MODEL}`);
+async function extractQuestionsFromPdf(pdfBytes: Buffer, filename: string, years: number[], expectedQuestionCount: number | null) {
   const catalog = TOPIC_CATALOG.map(topic => ({ subject: topic.subjectSlug, number: topic.numberLabel, name: topic.name, parentNumber: topic.parentNumberLabel ?? null }));
   const system = [
     "Extract every multiple-choice entrance exam question from the attached PDF and classify it using only the fixed topic catalog.",
@@ -196,16 +185,7 @@ async function extractQuestionsFromPdf(signedUrl: string, filename: string, year
     "If year or number cannot be read, use null. Keep all real questions in source order, and do not return instructions, model-exam sections, or answer keys as questions.",
   ].join(" ");
   const user = [`Source filename: ${filename}`, `Year hints: ${years.length ? years.join(", ") : "none"}`, `Expected total question count: ${expectedQuestionCount ?? "not supplied"}`, `Exact allowed topic catalog: ${JSON.stringify(catalog)}`, "Pages may be selectable-text or scanned. Return every question plus the required completeness assessment in strict JSON."].join("\n");
-  const messages: Message[] = [
-    { role: "system", content: system },
-    { role: "user", content: [{ type: "text", text: user }, { type: "file_url", file_url: { url: signedUrl, mime_type: "application/pdf" } }] },
-  ];
-  const response = await invokeLLM({ model: AI_MODEL, messages, reasoning: { effort: "low" }, responseFormat: { type: "json_schema", json_schema: { name: "exam_question_extraction", strict: true, schema: EXTRACTION_JSON_SCHEMA } } });
-  let output = extractText(response);
-  if (!output) {
-    const fallback = await invokeLLM({ model: AI_MODEL, messages: [...messages, { role: "user", content: "Retry once and return only a valid JSON object matching the required schema." }], reasoning: { effort: "low" } });
-    output = extractText(fallback);
-  }
+  const output = await extractPdfWithGemini(pdfBytes, filename, `${system}\n\n${user}`, EXTRACTION_JSON_SCHEMA);
   if (!output) throw new Error("AI xidməti emal üçün cavab qaytarmadı.");
   const parsed = extractionResultSchema.safeParse(parseModelJson(output));
   if (!parsed.success) throw new Error("AI cavabı tələb olunan sual quruluşuna uyğun deyil.");
@@ -326,7 +306,13 @@ async function runImport(examFileId: number) {
     await updateExamFileState(examFileId, "processing");
     await db.update(importJobs).set({ progress: 20, message: "PDF-dən suallar və mövzular çıxarılır." }).where(eq(importJobs.id, jobId));
     const signedUrl = await storageGetSignedUrl(file.storageKey);
-    const extraction = await extractQuestionsFromPdf(signedUrl, file.filename, file.years ?? [], file.expectedQuestionCount);
+    const sourceResponse = await fetch(signedUrl, { signal: AbortSignal.timeout(60_000) });
+    if (!sourceResponse.ok) throw new Error(`Orijinal PDF saxlamadan yüklənmədi (HTTP ${sourceResponse.status}).`);
+    const pdfBytes = Buffer.from(await sourceResponse.arrayBuffer());
+    if (pdfBytes.byteLength < 8 || pdfBytes.byteLength > MAX_PDF_BYTES || pdfBytes.subarray(0, 5).toString("ascii") !== "%PDF-") {
+      throw new Error("Saxlanmış mənbə etibarlı PDF deyil və ya 50 MB limitini keçir.");
+    }
+    const extraction = await extractQuestionsFromPdf(pdfBytes, file.filename, file.years ?? [], file.expectedQuestionCount);
     const extracted = extraction.questions;
     if (!extracted.length) throw new Error("PDF-dən heç bir sual çıxarılmadı; fayl uğursuz kimi saxlanıldı və yenidən emal edilə bilər.");
     const extractionWarnings: string[] = [];
@@ -390,8 +376,8 @@ export const questionBankRouter = router({
     if (!question) throw new TRPCError({ code: "NOT_FOUND", message: "Sual tapılmadı." });
     return redactQuestionForPublic(question);
   }),
-  reviewQueue: publicProcedure.query(async () => (await listQuestions({ needsReview: true, limit: 200, sort: "recent" })).map(redactQuestionForPublic)),
-  saveReview: publicProcedure.input(z.object({
+  reviewQueue: adminProcedure.query(async () => (await listQuestions({ needsReview: true, limit: 200, sort: "recent" })).map(redactQuestionForPublic)),
+  saveReview: adminProcedure.input(z.object({
     questionId: z.number().int().positive(), subjectId: z.number().int().positive().nullable(), topicId: z.number().int().positive().nullable(), subtopicId: z.number().int().positive().nullable(),
     correctedText: z.string().max(12000).nullable(), correctOption: z.string().max(8).nullable(), correctAnswerSource: z.string().max(1000).nullable(),
     answerKeyAction: z.enum(["unchanged", "set", "clear"]).default("unchanged"),
@@ -418,8 +404,8 @@ export const questionBankRouter = router({
     const success = await saveQuestionReview({ ...input, correctAnswerSource: input.answerKeyAction === "set" ? input.correctAnswerSource?.trim() ?? null : null, correctedText: input.correctedText?.trim() || null, reviewNote: input.reviewNote?.trim() || null });
     return { success };
   }),
-  importPdf: publicProcedure.input(z.object({ examFileId: z.number().int().positive() })).mutation(({ input }) => runImport(input.examFileId)),
-  retryImport: publicProcedure.input(z.object({ examFileId: z.number().int().positive() })).mutation(async ({ input }) => {
+  importPdf: adminProcedure.input(z.object({ examFileId: z.number().int().positive() })).mutation(({ input }) => runImport(input.examFileId)),
+  retryImport: adminProcedure.input(z.object({ examFileId: z.number().int().positive() })).mutation(async ({ input }) => {
     const file = await getExamFileById(input.examFileId);
     if (!file) throw new TRPCError({ code: "NOT_FOUND", message: "PDF mənbəyi tapılmadı." });
     if (file.processingStatus !== "failed" && file.processingStatus !== "uploaded") throw new TRPCError({ code: "CONFLICT", message: "Yalnız uğursuz və ya hələ işlənməmiş PDF yenidən emal edilə bilər." });
@@ -462,7 +448,7 @@ export const questionBankRouter = router({
     const attemptId = Number((result as unknown as [{ insertId: number }])[0]?.insertId);
     return { attemptId: Number.isFinite(attemptId) ? attemptId : null, totalQuestions: scoredAnswers.length, scoredQuestions, correctCount, incorrectCount, unscoredCount, scorePercent, answers: scoredAnswers };
   }),
-  exportBackup: publicProcedure.query(async () => {
+  exportBackup: adminProcedure.query(async () => {
     const subjectsData = await listSubjects();
     const examsData = await listExamFiles();
     const topicsData = (await Promise.all(SUBJECT_CATALOG.map(subject => listTopics(subject.slug)))).flat();
@@ -476,7 +462,7 @@ export const questionBankRouter = router({
     if (allQuestions.length >= 100000) throw new TRPCError({ code: "PAYLOAD_TOO_LARGE", message: "Ehtiyat nüsxəsi 100 000 sual limitini keçdi." });
     return { exportedAt: new Date().toISOString(), subjects: subjectsData, topics: topicsData, examFiles: examsData, questions: allQuestions };
   }),
-  manualQuestion: publicProcedure.input(z.object({
+  manualQuestion: adminProcedure.input(z.object({
     subjectSlug: z.enum(["informatika", "mentiq"]), topicSlug: z.string().max(96), subtopicSlug: z.string().max(96).nullable(), examYear: z.number().int().min(1900).max(2100).nullable(), questionNumber: z.number().int().positive().nullable(),
     questionText: z.string().trim().min(3).max(12000), options: z.array(z.object({ label: z.string().trim().min(1).max(8), text: z.string().trim().min(1).max(2000) }).strict()).min(2).max(10),
   })).mutation(async ({ input }) => {

@@ -6,6 +6,7 @@ import type { Request } from "express";
 import { SignJWT, jwtVerify } from "jose";
 import type { User } from "../../drizzle/schema";
 import * as db from "../db";
+import { isConfiguredAdmin } from "./adminIdentity";
 import { ENV } from "./env";
 import type {
   ExchangeTokenRequest,
@@ -319,10 +320,17 @@ class SDKServer {
 
     await db.upsertUser({
       openId: user.openId,
+      email: user.email ?? undefined,
       lastSignedIn: signedInAt,
     });
 
-    return user;
+    const authenticatedUser = (await db.getUserByOpenId(user.openId)) ?? user;
+    const configuredAdmin = isConfiguredAdmin(authenticatedUser.openId, authenticatedUser.email, {
+      ownerOpenId: ENV.ownerOpenId,
+      adminEmail: ENV.qebulfitAdminEmail,
+    });
+
+    return { ...authenticatedUser, role: configuredAdmin ? "admin" : "user" };
   }
 }
 
