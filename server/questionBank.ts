@@ -119,14 +119,14 @@ function sha256(value: string | Buffer) {
 function normalize(value: string) {
   return value.normalize("NFKC").toLocaleLowerCase("az").replace(/\s+/g, " ").trim();
 }
-function inferYears(filename: string) {
-  const range = filename.match(/\b(19|20)(\d{2})[-_](\d{2})\b/);
+export function inferYears(filename: string) {
+  const range = filename.match(/(?<!\d)(19|20)(\d{2})[-_](\d{2})(?!\d)/);
   if (range) {
     const first = Number(`${range[1]}${range[2]}`);
     const end = Number(`${range[1]}${range[3]}`);
-    if (end >= first && end <= first + 10) return [first, end];
+    if (end >= first && end <= first + 10) return Array.from({ length: end - first + 1 }, (_, index) => first + index);
   }
-  return [...new Set([...filename.matchAll(/\b(?:19|20)\d{2}\b/g)].map(match => Number(match[0])))].filter(year => year >= 1900 && year <= 2100).slice(0, 10);
+  return [...new Set([...filename.matchAll(/(?<!\d)(?:19|20)\d{2}(?!\d)/g)].map(match => Number(match[0])))].filter(year => year >= 1900 && year <= 2100).slice(0, 10);
 }
 
 export function completenessWarnings(completeness: ExtractionResult["completeness"]) {

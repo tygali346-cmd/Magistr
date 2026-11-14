@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { completenessWarnings } from "./questionBank";
+import { completenessWarnings, inferYears } from "./questionBank";
 
 describe("completenessWarnings", () => {
   it("does not warn for a likely-complete extraction just because it has a note", () => {
@@ -24,5 +24,18 @@ describe("completenessWarnings", () => {
       note: "",
       suspectedMissingQuestionNumbers: [4, 9],
     })).toEqual(["Buraxılmış ola bilən nömrələr: 4, 9."]);
+  });
+});
+
+describe("inferYears", () => {
+  it.each([
+    ["2010-11.pdf", [2010, 2011]],
+    ["imtahan_2012.pdf", [2012]],
+    ["qebul_2015_informatika.pdf", [2015]],
+    ["2015-18.pdf", [2015, 2016, 2017, 2018]],
+    ["Qəbul 2013.pdf", [2013]],
+    ["sənəd.pdf", []],
+  ])("infers years from %s", (filename, expected) => {
+    expect(inferYears(filename)).toEqual(expected);
   });
 });
