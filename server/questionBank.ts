@@ -7,9 +7,14 @@ import { SUBJECT_CATALOG, TOPIC_CATALOG, type SubjectSlug } from "@shared/topicC
 import { examFiles, importJobs, practiceSessions, questionOptions, questions, studyAttempts, subjects, topics, type AttemptAnswer, type QuestionMedia } from "../drizzle/schema";
 import { extractPdfWithGemini } from "./gemini";
 import { adminProcedure, publicProcedure, router } from "./_core/trpc";
-import { storageGetSignedUrl, storagePut } from "./storage";
+import { storageGetObject, storagePut } from "./storage";
 import { hasExactQuestionSet } from "./practiceSessionLogic";
+import { getDb } from "./db";
+import { memoryStore } from "./memoryStore";
+import { deleteFirestoreDoc } from "./firestoreRest";
+import { syncAllToFirestore, syncExamFileToFirestore, syncQuestionToFirestore } from "./firestoreSync";
 import {
+  ensureTopicCatalog,
   getDashboardData,
   getExamFileById,
   getLearnerAttempts,
@@ -20,7 +25,6 @@ import {
   listQuestions,
   listSubjects,
   listTopics,
-  requireDatabase,
   saveQuestionReview,
   updateExamFileState,
 } from "./questionBankDb";
@@ -158,32 +162,6 @@ export function completenessWarnings(completeness: ExtractionResult["completenes
   return warnings;
 }
 
-async function ensureTopicCatalog() {
-  const db = await requireDatabase();
-  for (const subject of SUBJECT_CATALOG) {
-    await db.insert(subjects).values(subject).onDuplicateKeyUpdate({ set: { slug: sql`${subjects.slug}` } });
-  }
-  const subjectRows = await db.select().from(subjects);
-  const subjectIds = new Map(subjectRows.map(subject => [subject.slug, subject.id]));
-  const topicRows = await db.select().from(topics);
-  const topicSlugs = new Set(topicRows.map(topic => topic.slug));
-  for (const topic of TOPIC_CATALOG) {
-    if (topicSlugs.has(topic.slug)) continue;
-    const subjectId = subjectIds.get(topic.subjectSlug);
-    if (!subjectId) throw new Error(`Fənn tapılmadı: ${topic.subjectSlug}`);
-    const parent = topic.parentNumberLabel ? topicRows.find(row => row.subjectId === subjectId && row.numberLabel === topic.parentNumberLabel) : undefined;
-    await db.insert(topics).values({ subjectId, slug: topic.slug, numberLabel: topic.numberLabel, name: topic.name, parentId: parent?.id ?? null, sortOrder: topic.sortOrder, isActive: true }).onDuplicateKeyUpdate({ set: { slug: sql`${topics.slug}` } });
-  }
-  const allTopics = await db.select().from(topics);
-  for (const definition of TOPIC_CATALOG) {
-    if (!definition.parentNumberLabel) continue;
-    const subjectId = subjectIds.get(definition.subjectSlug);
-    const parent = allTopics.find(topic => topic.subjectId === subjectId && topic.numberLabel === definition.parentNumberLabel);
-    const child = allTopics.find(topic => topic.slug === definition.slug);
-    if (parent && child && child.parentId !== parent.id) await db.update(topics).set({ parentId: parent.id }).where(eq(topics.id, child.id));
-  }
-}
-
 export async function storeUploadedPdf(bytes: Buffer, filenameInput: string, requestedYears: number[], expectedQuestionCountInput: number | null = null) {
   if (bytes.byteLength < 8 || bytes.byteLength > MAX_PDF_BYTES) throw new Error("PDF ölçüsü 8 bayt ilə 50 MB arasında olmalıdır.");
   if (bytes.subarray(0, 5).toString("ascii") !== "%PDF-") throw new Error("Yüklənmiş fayl etibarlı PDF kimi tanınmadı.");
@@ -194,7 +172,44 @@ export async function storeUploadedPdf(bytes: Buffer, filenameInput: string, req
   const providedYears = [...new Set(requestedYears.filter(year => Number.isInteger(year) && year >= 1900 && year <= 2100))];
   const years = providedYears.length ? providedYears : inferYears(filename);
   const fingerprint = sha256(bytes);
-  const db = await requireDatabase();
+  const db = await getDb();
+  if (!db) {
+    memoryStore.ensureInitialized();
+    const existing = memoryStore.examFiles.find(f => f.sha256 === fingerprint);
+    if (existing) return { examFileId: existing.id, duplicate: true, filename: existing.filename, processingStatus: existing.processingStatus, expectedQuestionCount: existing.expectedQuestionCount };
+    const safeFilename = filename.replace(/[^A-Za-z0-9._-]/g, "_");
+    const stored = await storagePut(`qebulfit/exams/${fingerprint.slice(0, 16)}-${safeFilename}`, bytes, "application/pdf");
+    const now = new Date();
+    const created = {
+      id: memoryStore.nextIds.examFile++,
+      filename,
+      title: filename.replace(/\.pdf$/i, ""),
+      storageKey: stored.key,
+      sourceUrl: stored.url,
+      sha256: fingerprint,
+      fileSize: bytes.byteLength,
+      mimeType: "application/pdf",
+      years,
+      expectedQuestionCount,
+      questionCount: 0,
+      processingStatus: "uploaded" as const,
+      createdAt: now,
+      updatedAt: now,
+    };
+    memoryStore.examFiles.push(created);
+    memoryStore.importJobs.push({
+      id: memoryStore.nextIds.importJob++,
+      examFileId: created.id,
+      status: "queued",
+      progress: 0,
+      message: "PDF yükləndi; AI emalı hələ başlamayıb.",
+      detectedQuestionCount: 0,
+      createdAt: now,
+      updatedAt: now,
+    });
+    memoryStore.saveSnapshot();
+    return { examFileId: created.id, duplicate: false, filename: created.filename, processingStatus: created.processingStatus, expectedQuestionCount: created.expectedQuestionCount };
+  }
   const [existing] = await db.select().from(examFiles).where(eq(examFiles.sha256, fingerprint)).limit(1);
   if (existing) return { examFileId: existing.id, duplicate: true, filename: existing.filename, processingStatus: existing.processingStatus, expectedQuestionCount: existing.expectedQuestionCount };
   const safeFilename = filename.replace(/[^A-Za-z0-9._-]/g, "_");
@@ -272,7 +287,7 @@ export function redactQuestionForPublic<T extends { correctOption: string | null
 }
 
 async function persistExtractedQuestions(examFileId: number, fileSha: string, fileYears: number[], imported: ImportQuestion[], extractionWarnings: string[]) {
-  const db = await requireDatabase();
+  const db = await getDb();
   let inserted = 0;
   let needsReview = 0;
   const fingerprints = planSourceFingerprints(fileSha, fileYears, imported);
@@ -288,6 +303,68 @@ async function persistExtractedQuestions(examFileId: number, fileSha: string, fi
     const questionText = item.questionText.trim();
     const options = item.options.map(option => ({ label: option.label.trim(), text: option.text.trim() })).filter(option => option.label && option.text);
     const contentFingerprint = sha256([questionText, ...options.map(option => `${option.label}:${option.text}`)].map(normalize).join("\n") || `empty-${fileSha}-${index}`);
+
+    if (!db) {
+      if (memoryStore.questions.some(q => q.sourceFingerprint === sourceFingerprint)) continue;
+      const sameContent = memoryStore.questions.find(q => q.contentFingerprint === contentFingerprint);
+      const reviewReasons = [
+        item.reviewNote.trim(),
+        ...itemWarnings,
+        !questionText ? "Sual mətni boşdur." : "",
+        !subject ? "Fənn müəyyən edilməyib." : "",
+        !mainTopic ? "Əsas mövzu müəyyən edilməyib." : "",
+        item.confidence < REVIEW_THRESHOLD ? "Təsnifat əminliyi aşağıdır." : "",
+        !year ? "İmtahan ili müəyyən edilməyib." : "",
+        !item.questionNumber ? "Sual nömrəsi müəyyən edilməyib." : "",
+        !options.length ? "Cavab variantı yoxdur." : "",
+        sameContent ? `Mümkün təkrar: ${sameContent.id}` : "",
+        item.subtopicNumber && !subtopic ? "Alt mövzu kataloqda tapılmadı." : "",
+        collision ? "il/nömrə toqquşması" : "",
+      ].filter(Boolean);
+      const uncertain = reviewReasons.length > 0;
+      const reviewNote = reviewReasons.join(" · ").slice(0, 2000) || null;
+      const media: QuestionMedia[] = item.media.map(entry => ({ kind: entry.kind, ...(entry.label ? { label: entry.label } : {}), value: entry.value, ...(entry.sourcePage ? { sourcePage: entry.sourcePage } : {}) }));
+      const labels = new Set<string>();
+      const finalOptions = options.map((option, optionIndex) => {
+        let label = option.label;
+        if (labels.has(label)) label = `${label}_${optionIndex + 1}`;
+        labels.add(label);
+        return { label, optionText: option.text, sortOrder: optionIndex + 1 };
+      });
+      const now = new Date();
+      const questionId = memoryStore.nextIds.question++;
+      memoryStore.questions.push({
+        id: questionId,
+        subjectId: subject?.id ?? null,
+        topicId: mainTopic?.id ?? null,
+        subtopicId: subtopic?.id ?? null,
+        examFileId,
+        examYear: year,
+        questionNumber: item.questionNumber,
+        originalText: questionText || "Mətn oxunmayıb — mənbə PDF səhifəsinə baxın.",
+        correctionSuggestion: item.correctionSuggestion?.trim() || null,
+        correctOption: null,
+        correctAnswerSource: null,
+        media: media.length ? media : null,
+        sourcePage: item.sourcePage,
+        classificationConfidence: item.confidence,
+        classificationReason: item.classificationReason.trim() || null,
+        reviewStatus: uncertain ? "needs_review" : "checked",
+        reviewNote,
+        sourceFingerprint,
+        contentFingerprint,
+        createdAt: now,
+        updatedAt: now,
+      });
+      for (const option of finalOptions) {
+        memoryStore.questionOptions.push({ id: memoryStore.nextIds.option++, questionId, ...option });
+      }
+      inserted += 1;
+      if (uncertain) needsReview += 1;
+      memoryStore.saveSnapshot();
+      continue;
+    }
+
     const [sameSource] = await db.select({ id: questions.id }).from(questions).where(eq(questions.sourceFingerprint, sourceFingerprint)).limit(1);
     if (sameSource) continue;
     const [sameContent] = await db.select({ id: questions.id }).from(questions).where(eq(questions.contentFingerprint, contentFingerprint)).limit(1);
@@ -349,17 +426,30 @@ async function persistExtractedQuestions(examFileId: number, fileSha: string, fi
 async function runImport(examFileId: number) {
   const file = await getExamFileById(examFileId);
   if (!file) throw new TRPCError({ code: "NOT_FOUND", message: "PDF mənbəyi tapılmadı." });
-  const db = await requireDatabase();
-  const insertResult = await db.insert(importJobs).values({ examFileId, status: "processing", progress: 5, message: "PDF AI üçün hazırlanır.", detectedQuestionCount: 0 });
-  const jobId = Number((insertResult as unknown as [{ insertId: number }])[0]?.insertId);
+  const db = await getDb();
+  let jobId = 0;
+  if (!db) {
+    const now = new Date();
+    jobId = memoryStore.nextIds.importJob++;
+    memoryStore.importJobs.push({ examFileId, id: jobId, status: "processing", progress: 5, message: "PDF AI üçün hazırlanır.", detectedQuestionCount: 0, createdAt: now, updatedAt: now });
+  } else {
+    const insertResult = await db.insert(importJobs).values({ examFileId, status: "processing", progress: 5, message: "PDF AI üçün hazırlanır.", detectedQuestionCount: 0 });
+    jobId = Number((insertResult as unknown as [{ insertId: number }])[0]?.insertId);
+  }
   if (!jobId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "İdxal işi yaradıla bilmədi." });
   try {
     await updateExamFileState(examFileId, "processing");
-    await db.update(importJobs).set({ progress: 20, message: "PDF-dən suallar və mövzular çıxarılır." }).where(eq(importJobs.id, jobId));
-    const signedUrl = await storageGetSignedUrl(file.storageKey);
-    const sourceResponse = await fetch(signedUrl, { signal: AbortSignal.timeout(60_000) });
-    if (!sourceResponse.ok) throw new Error(`Orijinal PDF saxlamadan yüklənmədi (HTTP ${sourceResponse.status}).`);
-    const pdfBytes = Buffer.from(await sourceResponse.arrayBuffer());
+    if (!db) {
+      const job = memoryStore.importJobs.find(j => j.id === jobId);
+      if (job) { job.progress = 20; job.message = "PDF-dən suallar və mövzular çıxarılır."; job.updatedAt = new Date(); }
+    } else {
+      await db.update(importJobs).set({ progress: 20, message: "PDF-dən suallar və mövzular çıxarılır." }).where(eq(importJobs.id, jobId));
+    }
+    const storedObject = await storageGetObject(file.storageKey);
+    if (!storedObject) {
+      throw new Error("Orijinal PDF saxlamada tapılmadı.");
+    }
+    const pdfBytes = storedObject.bytes;
     if (pdfBytes.byteLength < 8 || pdfBytes.byteLength > MAX_PDF_BYTES || pdfBytes.subarray(0, 5).toString("ascii") !== "%PDF-") {
       throw new Error("Saxlanmış mənbə etibarlı PDF deyil və ya 50 MB limitini keçir.");
     }
@@ -371,21 +461,47 @@ async function runImport(examFileId: number) {
       extractionWarnings.push(`Gözlənilən ${file.expectedQuestionCount} sualdan ${extracted.length} sual çıxarıldı.`);
     }
     extractionWarnings.push(...questionSequenceWarnings(extracted, file.years ?? []));
-    await db.update(importJobs).set({ progress: 75, message: `${extracted.length} sual tanındı; mənbə və təkrar yoxlanır.` }).where(eq(importJobs.id, jobId));
+    if (!db) {
+      const job = memoryStore.importJobs.find(j => j.id === jobId);
+      if (job) { job.progress = 75; job.message = `${extracted.length} sual tanındı; mənbə və təkrar yoxlanır.`; job.updatedAt = new Date(); }
+    } else {
+      await db.update(importJobs).set({ progress: 75, message: `${extracted.length} sual tanındı; mənbə və təkrar yoxlanır.` }).where(eq(importJobs.id, jobId));
+    }
     const result = await persistExtractedQuestions(examFileId, file.sha256, file.years ?? [], extracted, extractionWarnings);
-    const [totalResult] = await db.select({ value: count() }).from(questions).where(eq(questions.examFileId, examFileId));
-    const [reviewResult] = await db.select({ value: count() }).from(questions).where(and(eq(questions.examFileId, examFileId), eq(questions.reviewStatus, "needs_review")));
-    const totalQuestions = totalResult?.value ?? 0;
-    const needsReview = reviewResult?.value ?? 0;
+    let totalQuestions = 0;
+    let needsReview = 0;
+    if (!db) {
+      const fileQuestions = memoryStore.questions.filter(q => q.examFileId === examFileId);
+      totalQuestions = fileQuestions.length;
+      needsReview = fileQuestions.filter(q => q.reviewStatus === "needs_review").length;
+    } else {
+      const [totalResult] = await db.select({ value: count() }).from(questions).where(eq(questions.examFileId, examFileId));
+      const [reviewResult] = await db.select({ value: count() }).from(questions).where(and(eq(questions.examFileId, examFileId), eq(questions.reviewStatus, "needs_review")));
+      totalQuestions = totalResult?.value ?? 0;
+      needsReview = reviewResult?.value ?? 0;
+    }
     const state = needsReview ? "needs_review" : "completed";
     const warningText = extractionWarnings.length ? ` Tamlıq yoxlanışı: ${extractionWarnings.join(" ")}` : "";
-    await db.update(importJobs).set({ status: state, progress: 100, detectedQuestionCount: extracted.length, message: `${result.inserted} yeni sual saxlanıldı; ${needsReview} sual yoxlanış tələb edir.${warningText}` }).where(eq(importJobs.id, jobId));
+    const doneMsg = `${result.inserted} yeni sual saxlanıldı; ${needsReview} sual yoxlanış tələb edir.${warningText}`;
+    if (!db) {
+      const job = memoryStore.importJobs.find(j => j.id === jobId);
+      if (job) { job.status = state; job.progress = 100; job.detectedQuestionCount = extracted.length; job.message = doneMsg; job.updatedAt = new Date(); }
+    } else {
+      await db.update(importJobs).set({ status: state, progress: 100, detectedQuestionCount: extracted.length, message: doneMsg }).where(eq(importJobs.id, jobId));
+    }
     await updateExamFileState(examFileId, state, totalQuestions);
+    memoryStore.saveSnapshot();
     return { jobId, detected: extracted.length, inserted: result.inserted, needsReview, status: state };
   } catch (error) {
     const message = error instanceof Error ? error.message.slice(0, 1000) : "PDF emalı alınmadı.";
-    await db.update(importJobs).set({ status: "failed", progress: 100, message }).where(eq(importJobs.id, jobId));
+    if (!db) {
+      const job = memoryStore.importJobs.find(j => j.id === jobId);
+      if (job) { job.status = "failed"; job.progress = 100; job.message = message; job.updatedAt = new Date(); }
+    } else {
+      await db.update(importJobs).set({ status: "failed", progress: 100, message }).where(eq(importJobs.id, jobId));
+    }
     await updateExamFileState(examFileId, "failed");
+    memoryStore.saveSnapshot();
     throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message });
   }
 }
@@ -426,12 +542,47 @@ export const questionBankRouter = router({
     hasVerifiedAnswer: Boolean(question.correctOption && question.correctAnswerSource),
   }))),
   highConfidenceReviewCount: adminProcedure.query(async () => {
-    const db = await requireDatabase();
+    const db = await getDb();
+    if (!db) {
+      memoryStore.ensureInitialized();
+      return memoryStore.questions.filter(q =>
+        q.reviewStatus === "needs_review" &&
+        (q.classificationConfidence ?? 0) >= HIGH_CONFIDENCE_REVIEW_THRESHOLD &&
+        q.subjectId !== null &&
+        q.topicId !== null &&
+        q.examYear !== null &&
+        q.questionNumber !== null &&
+        (!q.reviewNote || !q.reviewNote.trim()) &&
+        memoryStore.questionOptions.some(o => o.questionId === q.id),
+      ).length;
+    }
     const [result] = await db.select({ value: count() }).from(questions).where(highConfidenceReviewCondition());
     return result?.value ?? 0;
   }),
-  approveHighConfidenceReview: adminProcedure.input(z.object({ expectedCount: z.number().int().positive() })).mutation(async ({ input }) => {
-    const db = await requireDatabase();
+  approveHighConfidenceReview: adminProcedure.input(z.object({ expectedCount: z.number().int().positive() })).mutation(async ({ input, ctx }) => {
+    const db = await getDb();
+    if (!db) {
+      memoryStore.ensureInitialized();
+      const matching = memoryStore.questions.filter(q =>
+        q.reviewStatus === "needs_review" &&
+        (q.classificationConfidence ?? 0) >= HIGH_CONFIDENCE_REVIEW_THRESHOLD &&
+        q.subjectId !== null &&
+        q.topicId !== null &&
+        q.examYear !== null &&
+        q.questionNumber !== null &&
+        (!q.reviewNote || !q.reviewNote.trim()) &&
+        memoryStore.questionOptions.some(o => o.questionId === q.id),
+      );
+      if (matching.length !== input.expectedCount) {
+        throw new TRPCError({ code: "CONFLICT", message: "Yoxlanış siyahısı dəyişib. Sayı yeniləyib əməliyyatı təkrar başladın." });
+      }
+      for (const q of matching) q.reviewStatus = "checked";
+      memoryStore.saveSnapshot();
+      if (ctx.firebaseIdToken && ctx.user) {
+        await Promise.all(matching.map(q => syncQuestionToFirestore(q.id, ctx.firebaseIdToken!, ctx.user!.openId)));
+      }
+      return { approved: matching.length };
+    }
     return db.transaction(async tx => {
       const predicate = highConfidenceReviewCondition();
       const [result] = await tx.select({ value: count() }).from(questions).where(predicate);
@@ -448,19 +599,30 @@ export const questionBankRouter = router({
     correctedText: z.string().max(12000).nullable(), correctOption: z.string().max(8).nullable(), correctAnswerSource: z.string().max(1000).nullable(),
     answerKeyAction: z.enum(["unchanged", "set", "clear"]).default("unchanged"),
     reviewStatus: z.enum(["checked", "needs_review"]), reviewNote: z.string().max(2000).nullable(),
-  })).mutation(async ({ input }) => {
+  })).mutation(async ({ input, ctx }) => {
     const current = await getQuestion(input.questionId);
     if (!current) throw new TRPCError({ code: "NOT_FOUND", message: "Sual tapılmadı." });
     if (input.reviewStatus === "checked" && (!input.subjectId || !input.topicId)) throw new TRPCError({ code: "BAD_REQUEST", message: "Yoxlanmış sual üçün fənn və əsas mövzu seçilməlidir." });
     if ((input.topicId || input.subtopicId) && !input.subjectId) throw new TRPCError({ code: "BAD_REQUEST", message: "Mövzu seçmək üçün əvvəlcə fənn seçilməlidir." });
-    const db = await requireDatabase();
-    if (input.topicId) {
-      const [topic] = await db.select().from(topics).where(eq(topics.id, input.topicId)).limit(1);
-      if (!topic || topic.subjectId !== input.subjectId) throw new TRPCError({ code: "BAD_REQUEST", message: "Mövzu seçilmiş fənnə uyğun deyil." });
-    }
-    if (input.subtopicId) {
-      const [subtopic] = await db.select().from(topics).where(eq(topics.id, input.subtopicId)).limit(1);
-      if (!subtopic || subtopic.parentId !== input.topicId || subtopic.subjectId !== input.subjectId) throw new TRPCError({ code: "BAD_REQUEST", message: "Alt mövzu seçilmiş əsas mövzuya uyğun deyil." });
+    const db = await getDb();
+    if (!db) {
+      if (input.topicId) {
+        const topic = memoryStore.getTopicById(input.topicId);
+        if (!topic || topic.subjectId !== input.subjectId) throw new TRPCError({ code: "BAD_REQUEST", message: "Mövzu seçilmiş fənnə uyğun deyil." });
+      }
+      if (input.subtopicId) {
+        const subtopic = memoryStore.getTopicById(input.subtopicId);
+        if (!subtopic || subtopic.parentId !== input.topicId || subtopic.subjectId !== input.subjectId) throw new TRPCError({ code: "BAD_REQUEST", message: "Alt mövzu seçilmiş əsas mövzuya uyğun deyil." });
+      }
+    } else {
+      if (input.topicId) {
+        const [topic] = await db.select().from(topics).where(eq(topics.id, input.topicId)).limit(1);
+        if (!topic || topic.subjectId !== input.subjectId) throw new TRPCError({ code: "BAD_REQUEST", message: "Mövzu seçilmiş fənnə uyğun deyil." });
+      }
+      if (input.subtopicId) {
+        const [subtopic] = await db.select().from(topics).where(eq(topics.id, input.subtopicId)).limit(1);
+        if (!subtopic || subtopic.parentId !== input.topicId || subtopic.subjectId !== input.subjectId) throw new TRPCError({ code: "BAD_REQUEST", message: "Alt mövzu seçilmiş əsas mövzuya uyğun deyil." });
+      }
     }
     if (input.answerKeyAction === "set") {
       if (!input.correctOption) throw new TRPCError({ code: "BAD_REQUEST", message: "Düzgün variant seçilməlidir." });
@@ -468,17 +630,63 @@ export const questionBankRouter = router({
       if (!input.correctAnswerSource?.trim()) throw new TRPCError({ code: "BAD_REQUEST", message: "Düzgün cavab üçün etibarlı mənbə qeyd edilməlidir." });
     }
     const success = await saveQuestionReview({ ...input, correctAnswerSource: input.answerKeyAction === "set" ? input.correctAnswerSource?.trim() ?? null : null, correctedText: input.correctedText?.trim() || null, reviewNote: input.reviewNote?.trim() || null });
+    if (success && ctx.firebaseIdToken && ctx.user) {
+      await syncQuestionToFirestore(input.questionId, ctx.firebaseIdToken, ctx.user.openId);
+    }
     return { success };
   }),
-  importPdf: adminProcedure.input(z.object({ examFileId: z.number().int().positive() })).mutation(({ input }) => runImport(input.examFileId)),
-  retryImport: adminProcedure.input(z.object({ examFileId: z.number().int().positive() })).mutation(async ({ input }) => {
+  importPdf: adminProcedure.input(z.object({ examFileId: z.number().int().positive() })).mutation(async ({ input, ctx }) => {
+    const res = await runImport(input.examFileId);
+    if (ctx.firebaseIdToken && ctx.user) {
+      await syncExamFileToFirestore(input.examFileId, ctx.firebaseIdToken);
+      for (const q of memoryStore.questions.filter(item => item.examFileId === input.examFileId)) {
+        await syncQuestionToFirestore(q.id, ctx.firebaseIdToken, ctx.user.openId);
+      }
+    }
+    return res;
+  }),
+  retryImport: adminProcedure.input(z.object({ examFileId: z.number().int().positive() })).mutation(async ({ input, ctx }) => {
     const file = await getExamFileById(input.examFileId);
     if (!file) throw new TRPCError({ code: "NOT_FOUND", message: "PDF mənbəyi tapılmadı." });
     if (!["failed", "uploaded", "completed", "needs_review"].includes(file.processingStatus)) throw new TRPCError({ code: "CONFLICT", message: "Bu PDF hazırda emal olunur və yenidən başladılmış hesab edilmir." });
-    return runImport(file.id);
+    const res = await runImport(file.id);
+    if (ctx.firebaseIdToken && ctx.user) {
+      await syncExamFileToFirestore(file.id, ctx.firebaseIdToken);
+      for (const q of memoryStore.questions.filter(item => item.examFileId === file.id)) {
+        await syncQuestionToFirestore(q.id, ctx.firebaseIdToken, ctx.user.openId);
+      }
+    }
+    return res;
   }),
-  deleteExamFile: adminProcedure.input(z.object({ examFileId: z.number().int().positive() })).mutation(async ({ input }) => {
-    const db = await requireDatabase();
+  syncFirestore: adminProcedure.mutation(async ({ ctx }) => {
+    if (!ctx.firebaseIdToken || !ctx.user || ctx.user.loginMethod !== "firebase") {
+      return { synced: 0 };
+    }
+    return syncAllToFirestore(ctx.firebaseIdToken, ctx.user.openId);
+  }),
+  deleteExamFile: adminProcedure.input(z.object({ examFileId: z.number().int().positive() })).mutation(async ({ input, ctx }) => {
+    const db = await getDb();
+    if (!db) {
+      memoryStore.ensureInitialized();
+      const file = memoryStore.examFiles.find(f => f.id === input.examFileId);
+      if (!file) throw new TRPCError({ code: "NOT_FOUND", message: "PDF mənbəyi tapılmadı." });
+      if (file.mimeType !== "application/pdf" || file.sourceUrl.startsWith("manual://")) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Əl ilə əlavə edilmiş sualların mənbəyi silinə bilməz." });
+      }
+      const deletedIds = new Set(memoryStore.questions.filter(q => q.examFileId === file.id).map(q => q.id));
+      memoryStore.questions = memoryStore.questions.filter(q => q.examFileId !== file.id);
+      memoryStore.questionOptions = memoryStore.questionOptions.filter(o => !deletedIds.has(o.questionId));
+      memoryStore.examFiles = memoryStore.examFiles.filter(f => f.id !== file.id);
+      memoryStore.saveSnapshot();
+      if (ctx.firebaseIdToken) {
+        await deleteFirestoreDoc(`examFiles/${file.id}`, ctx.firebaseIdToken);
+        for (const qId of deletedIds) {
+          await deleteFirestoreDoc(`questions/${qId}`, ctx.firebaseIdToken);
+          await deleteFirestoreDoc(`questionAnswers/${qId}`, ctx.firebaseIdToken);
+        }
+      }
+      return { deletedQuestionCount: deletedIds.size };
+    }
     return db.transaction(async tx => {
       const [file] = await tx.select({ id: examFiles.id, mimeType: examFiles.mimeType, sourceUrl: examFiles.sourceUrl }).from(examFiles).where(eq(examFiles.id, input.examFileId)).limit(1);
       if (!file) throw new TRPCError({ code: "NOT_FOUND", message: "PDF mənbəyi tapılmadı." });
@@ -516,7 +724,16 @@ export const questionBankRouter = router({
       throw new TRPCError({ code: "CONFLICT", message: "Test sualları yenilənib. Siyahını yeniləyib testi yenidən başladın." });
     }
 
-    const db = await requireDatabase();
+    const db = await getDb();
+    if (!db) {
+      return memoryStore.startPracticeSession({
+        learnerKey: input.learnerKey,
+        subjectId: subject.id,
+        topicId: topic.id,
+        examYear: input.examYear,
+        questionIds,
+      });
+    }
     const now = new Date();
     await db.delete(practiceSessions).where(lte(practiceSessions.expiresAt, now));
     const sessionToken = randomBytes(32).toString("hex");
@@ -536,7 +753,68 @@ export const questionBankRouter = router({
     learnerKey: z.string().min(16).max(64), sessionToken: z.string().length(64),
     answers: z.array(z.object({ questionId: z.number().int().positive(), selectedOption: z.string().max(8).nullable() }).strict()).min(1).max(200),
   }).strict()).mutation(async ({ input }) => {
-    const db = await requireDatabase();
+    const db = await getDb();
+    if (!db) {
+      memoryStore.ensureInitialized();
+      const tokenHash = sha256(input.sessionToken);
+      const session = memoryStore.practiceSessions.find(s => s.tokenHash === tokenHash && s.learnerKey === input.learnerKey);
+      if (!session || session.expiresAt.getTime() <= Date.now()) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Test sessiyası tapılmadı və ya vaxtı bitib. Testi yenidən başladın." });
+      }
+      const answers = input.answers;
+      const ids = session.questionIds;
+      if (session.topicId === null) throw new TRPCError({ code: "CONFLICT", message: "Test mövzusu tapılmadı. Testi yenidən başladın." });
+      const currentOfferedIds = memoryStore.questions
+        .filter(q => q.subjectId === session.subjectId && q.topicId === session.topicId && (session.examYear === null || q.examYear === session.examYear))
+        .sort((a, b) => ((a.examYear ?? 0) - (b.examYear ?? 0)) || ((a.questionNumber ?? 0) - (b.questionNumber ?? 0)))
+        .slice(0, 200)
+        .map(q => q.id);
+      if (!hasExactQuestionSet(ids, currentOfferedIds)) {
+        throw new TRPCError({ code: "CONFLICT", message: "Mövzunun sual siyahısı test başlayandan sonra dəyişib. Siyahını yeniləyib testi yenidən başladın." });
+      }
+      if (!hasExactQuestionSet(ids, answers.map(answer => answer.questionId))) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Nəticə yalnız sessiyadakı bütün suallar üçün göndərilə bilər." });
+      }
+      const questionRows = memoryStore.questions.filter(q => ids.includes(q.id));
+      if (questionRows.length !== ids.length) throw new TRPCError({ code: "CONFLICT", message: "Test suallarından biri dəyişib və ya silinib. Testi yenidən başladın." });
+      let correctCount = 0;
+      let incorrectCount = 0;
+      let unscoredCount = 0;
+      const scoredAnswers: AttemptAnswer[] = answers.map(answer => {
+        const question = questionRows.find(row => row.id === answer.questionId)!;
+        if (question.subjectId !== session.subjectId || (session.topicId && question.topicId !== session.topicId) || (session.examYear !== null && question.examYear !== session.examYear)) {
+          throw new TRPCError({ code: "CONFLICT", message: "Test suallarının fənni, mövzusu və ya ili dəyişib. Testi yenidən başladın." });
+        }
+        const selectedExists = answer.selectedOption !== null && memoryStore.questionOptions.some(o => o.questionId === question.id && o.label === answer.selectedOption);
+        const isScored = !!question.correctOption && selectedExists;
+        const isCorrect = isScored ? answer.selectedOption === question.correctOption : null;
+        if (!isScored) unscoredCount += 1;
+        else if (isCorrect) correctCount += 1;
+        else incorrectCount += 1;
+        return { questionId: question.id, selectedOption: selectedExists ? answer.selectedOption : null, verifiedCorrectOption: isScored && !isCorrect ? question.correctOption : null, isScored, isCorrect };
+      });
+      const scoredQuestions = correctCount + incorrectCount;
+      const scorePercent = scoredQuestions ? Math.round(correctCount / scoredQuestions * 100) : null;
+      const attemptId = memoryStore.nextIds.attempt++;
+      memoryStore.studyAttempts.push({
+        id: attemptId,
+        learnerKey: session.learnerKey,
+        subjectId: session.subjectId,
+        topicId: session.topicId,
+        examYear: session.examYear,
+        totalQuestions: scoredAnswers.length,
+        scoredQuestions,
+        correctCount,
+        incorrectCount,
+        unscoredCount,
+        scorePercent,
+        answers: scoredAnswers,
+        createdAt: new Date(),
+      });
+      memoryStore.practiceSessions = memoryStore.practiceSessions.filter(s => s.id !== session.id);
+      memoryStore.saveSnapshot();
+      return { attemptId, totalQuestions: scoredAnswers.length, scoredQuestions, correctCount, incorrectCount, unscoredCount, scorePercent, answers: scoredAnswers };
+    }
     return db.transaction(async tx => {
       const [session] = await tx.select().from(practiceSessions).where(and(
         eq(practiceSessions.tokenHash, sha256(input.sessionToken)),
@@ -621,22 +899,45 @@ export const questionBankRouter = router({
   manualQuestion: adminProcedure.input(z.object({
     subjectSlug: z.enum(["informatika", "mentiq"]), topicSlug: z.string().max(96), subtopicSlug: z.string().max(96).nullable(), examYear: z.number().int().min(1900).max(2100).nullable(), questionNumber: z.number().int().positive().nullable(),
     questionText: z.string().trim().min(3).max(12000), options: z.array(z.object({ label: z.string().trim().min(1).max(8), text: z.string().trim().min(1).max(2000) }).strict()).min(2).max(10),
-  })).mutation(async ({ input }) => {
-    const db = await requireDatabase();
+  })).mutation(async ({ input, ctx }) => {
     const subject = await getSubjectBySlug(input.subjectSlug);
     const topic = await getTopicBySlug(input.topicSlug);
     const subtopic = input.subtopicSlug ? await getTopicBySlug(input.subtopicSlug) : null;
     if (!subject || !topic || topic.subjectId !== subject.id) throw new TRPCError({ code: "BAD_REQUEST", message: "Fənn və mövzu uyğun deyil." });
     if (input.subtopicSlug && (!subtopic || subtopic.parentId !== topic.id || subtopic.subjectId !== subject.id)) throw new TRPCError({ code: "BAD_REQUEST", message: "Alt mövzu əsas mövzuya uyğun deyil." });
     const manualHash = sha256("qebulfit-manual-question-source-v1");
+    const contentFingerprint = sha256([input.questionText, ...input.options.map(option => `${option.label}:${option.text}`)].map(normalize).join("\n"));
+    const sourceFingerprint = `manual:${contentFingerprint}`.slice(0, 96);
+    const db = await getDb();
+    if (!db) {
+      memoryStore.ensureInitialized();
+      let manualFile = memoryStore.examFiles.find(f => f.sha256 === manualHash);
+      const now = new Date();
+      if (!manualFile) {
+        manualFile = { id: memoryStore.nextIds.examFile++, filename: "Əl ilə əlavə edilmiş suallar", title: "İstifadəçi tərəfindən əlavə olunub", storageKey: "manual/qebulfit/questions", sourceUrl: "manual://qebulfit/manual-entry", sha256: manualHash, fileSize: 0, mimeType: "application/x-qebulfit-manual", years: [], expectedQuestionCount: null, questionCount: 0, processingStatus: "completed", createdAt: now, updatedAt: now };
+        memoryStore.examFiles.push(manualFile);
+      }
+      const duplicate = memoryStore.questions.find(q => q.contentFingerprint === contentFingerprint);
+      if (duplicate) throw new TRPCError({ code: "CONFLICT", message: `Eyni məzmuna bənzər sual artıq mövcuddur (#${duplicate.id}).` });
+      const questionId = memoryStore.nextIds.question++;
+      memoryStore.questions.push({ id: questionId, subjectId: subject.id, topicId: topic.id, subtopicId: subtopic?.id ?? null, examFileId: manualFile.id, examYear: input.examYear, questionNumber: input.questionNumber, originalText: input.questionText, correctionSuggestion: null, correctOption: null, correctAnswerSource: null, media: null, sourcePage: null, classificationConfidence: 1, classificationReason: "İstifadəçi fənn və mövzunu əl ilə seçib.", reviewStatus: "checked", reviewNote: null, sourceFingerprint, contentFingerprint, createdAt: now, updatedAt: now });
+      input.options.forEach((option, index) => {
+        memoryStore.questionOptions.push({ id: memoryStore.nextIds.option++, questionId, label: option.label, optionText: option.text, sortOrder: index + 1 });
+      });
+      manualFile.questionCount += 1;
+      memoryStore.saveSnapshot();
+      if (ctx.firebaseIdToken && ctx.user) {
+        await syncExamFileToFirestore(manualFile.id, ctx.firebaseIdToken);
+        await syncQuestionToFirestore(questionId, ctx.firebaseIdToken, ctx.user.openId);
+      }
+      return { success: true, questionId };
+    }
     let [manualFile] = await db.select().from(examFiles).where(eq(examFiles.sha256, manualHash)).limit(1);
     if (!manualFile) {
       await db.insert(examFiles).values({ filename: "Əl ilə əlavə edilmiş suallar", title: "İstifadəçi tərəfindən əlavə olunub", storageKey: "manual/qebulfit/questions", sourceUrl: "manual://qebulfit/manual-entry", sha256: manualHash, fileSize: 0, mimeType: "application/x-qebulfit-manual", years: [], questionCount: 0, processingStatus: "completed" }).onDuplicateKeyUpdate({ set: { sha256: sql`${examFiles.sha256}` } });
       [manualFile] = await db.select().from(examFiles).where(eq(examFiles.sha256, manualHash)).limit(1);
     }
     if (!manualFile) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Əl ilə əlavə olunan sual üçün mənbə qeydi yaradıla bilmədi." });
-    const contentFingerprint = sha256([input.questionText, ...input.options.map(option => `${option.label}:${option.text}`)].map(normalize).join("\n"));
-    const sourceFingerprint = `manual:${contentFingerprint}`.slice(0, 96);
     const [duplicate] = await db.select({ id: questions.id }).from(questions).where(eq(questions.contentFingerprint, contentFingerprint)).limit(1);
     if (duplicate) throw new TRPCError({ code: "CONFLICT", message: `Eyni məzmuna bənzər sual artıq mövcuddur (#${duplicate.id}).` });
     let questionId = 0;

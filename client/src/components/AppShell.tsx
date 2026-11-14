@@ -1,6 +1,8 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Link, useLocation } from "wouter";
-import { BookOpenCheck, Brain, CircleHelp, ClipboardCheck, FileUp, Home, type LucideIcon, PanelsTopLeft } from "lucide-react";
+import { BookOpenCheck, Brain, CircleHelp, ClipboardCheck, FileUp, Home, LogIn, LogOut, type LucideIcon, PanelsTopLeft, User } from "lucide-react";
+import { useAuth } from "@/_core/hooks/useAuth";
+import { useFirebase } from "@/contexts/FirebaseContext";
 
 type NavigationLink = { href: string; label: string; icon: LucideIcon };
 const primaryLinks: NavigationLink[] = [
@@ -55,6 +57,19 @@ export default function AppShell({
   children: ReactNode;
 }) {
   const [location] = useLocation();
+  const { user, logout } = useAuth();
+  const { authReady, firebaseUser, signingIn, signInWithGoogle } = useFirebase();
+  const [authError, setAuthError] = useState("");
+
+  async function handleGoogleSignIn() {
+    setAuthError("");
+    try {
+      await signInWithGoogle();
+    } catch {
+      setAuthError("Google girişi tamamlanmadı.");
+    }
+  }
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -63,6 +78,52 @@ export default function AppShell({
         <NavigationGroup label="FƏNNLƏR" links={primaryLinks} location={location} />
         <NavigationGroup label="İDARƏETMƏ" links={manageLinks} location={location} />
         <div className="sidebar-spacer" />
+        {authReady && (
+          <div className="mb-3 grid gap-2 rounded-xl border border-[#e5ece6] bg-[#f5f8f3] p-2.5">
+            {firebaseUser ? (
+              <>
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-[#e7f2ef] text-[var(--app-teal)]">
+                    <User size={14} />
+                  </span>
+                  <div className="min-w-0">
+                    <div className="truncate text-xs font-semibold text-[#2d443c]">
+                      {firebaseUser.displayName || firebaseUser.email || "Hesab"}
+                    </div>
+                    {firebaseUser.email && (
+                      <div className="truncate text-[10px] text-[#7a8982]">{firebaseUser.email}</div>
+                    )}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-secondary w-full !min-h-[34px] text-xs"
+                  onClick={() => void logout()}
+                >
+                  <LogOut size={13} /> Çıxış
+                </button>
+              </>
+            ) : user?.role === "admin" ? (
+              <button
+                type="button"
+                className="btn btn-secondary w-full !min-h-[34px] text-xs"
+                onClick={() => void logout()}
+              >
+                <LogOut size={13} /> Admin çıxışı
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="btn btn-secondary w-full !min-h-[34px] text-xs"
+                disabled={signingIn}
+                onClick={() => void handleGoogleSignIn()}
+              >
+                <LogIn size={13} /> {signingIn ? "Giriş edilir…" : "Google ilə daxil ol"}
+              </button>
+            )}
+            {authError && <p className="m-0 text-[10px] text-[#9e3e37]">{authError}</p>}
+          </div>
+        )}
         <div className="sidebar-note">
           <span className="sidebar-note-dot" />
           <div><strong>Mənbəyə bağlı</strong><span>Suallar PDF və il üzrə saxlanır</span></div>

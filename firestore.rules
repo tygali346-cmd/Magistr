@@ -1,0 +1,440 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Phase 3: Global Primitives ---
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isEmailVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isEmailVerified() && (
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+        request.auth.token.email == 'tygali346@gmail.com'
+      );
+    }
+
+    function isValidString(val, minLen, maxLen) {
+      return val is string && val.size() >= minLen && val.size() <= maxLen;
+    }
+
+    function isValidPublicCatalogDoc(data) {
+      return data.visibility == 'public'
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // --- Entity Validation Blueprints (Phase 4) ---
+    function isValidUserPublicProfile(data, userId) {
+      return data.keys().hasAll(['uid', 'displayName', 'role', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'displayName', 'role', 'createdAt', 'updatedAt'])
+        && isValidId(data.uid)
+        && data.uid == userId
+        && isValidString(data.displayName, 1, 120)
+        && data.role in ['user', 'admin']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidUserPrivateInfo(data, userId) {
+      return data.keys().hasAll(['uid', 'email', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'createdAt', 'updatedAt'])
+        && isValidId(data.uid)
+        && data.uid == userId
+        && isValidString(data.email, 3, 320)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAdminMembership(data, userId) {
+      return data.keys().hasAll(['uid', 'createdAt'])
+        && data.keys().hasOnly(['uid', 'createdAt'])
+        && isValidId(data.uid)
+        && data.uid == userId
+        && data.createdAt is timestamp;
+    }
+
+    function isValidSubjectCatalog(data) {
+      return data.keys().hasAll(['slug', 'name', 'sortOrder', 'visibility', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['slug', 'name', 'sortOrder', 'visibility', 'createdAt', 'updatedAt'])
+        && data.slug in ['informatika', 'mentiq']
+        && isValidString(data.name, 1, 128)
+        && data.sortOrder is int
+        && isValidPublicCatalogDoc(data);
+    }
+
+    function isValidTopicCatalog(data) {
+      return data.keys().hasAll(['subjectSlug', 'slug', 'numberLabel', 'name', 'sortOrder', 'isActive', 'visibility', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['subjectSlug', 'slug', 'numberLabel', 'name', 'parentSlug', 'sortOrder', 'isActive', 'visibility', 'createdAt', 'updatedAt'])
+        && data.subjectSlug in ['informatika', 'mentiq']
+        && isValidString(data.slug, 1, 96)
+        && data.slug.matches('^[a-zA-Z0-9_\\-]+$')
+        && isValidString(data.numberLabel, 1, 16)
+        && isValidString(data.name, 1, 255)
+        && (!('parentSlug' in data) || isValidString(data.parentSlug, 1, 96))
+        && data.sortOrder is int
+        && data.isActive is bool
+        && isValidPublicCatalogDoc(data);
+    }
+
+    function isValidExamFile(data) {
+      return data.keys().hasAll(['filename', 'title', 'sourceUrl', 'sha256', 'fileSize', 'mimeType', 'years', 'questionCount', 'processingStatus', 'visibility', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['filename', 'title', 'sourceUrl', 'sha256', 'fileSize', 'mimeType', 'years', 'questionCount', 'processingStatus', 'visibility', 'createdAt', 'updatedAt'])
+        && isValidString(data.filename, 1, 255)
+        && isValidString(data.title, 1, 255)
+        && isValidString(data.sourceUrl, 1, 512)
+        && isValidString(data.sha256, 64, 64)
+        && data.fileSize is int && data.fileSize >= 0
+        && isValidString(data.mimeType, 1, 128)
+        && data.years is list && data.years.size() <= 10
+        && (data.years.size() == 0 || data.years[0] is int)
+        && data.questionCount is int && data.questionCount >= 0
+        && data.processingStatus in ['uploaded', 'processing', 'completed', 'needs_review', 'failed']
+        && isValidPublicCatalogDoc(data);
+    }
+
+    function isValidQuestion(data) {
+      return data.keys().hasAll(['questionId', 'examFileId', 'originalText', 'options', 'reviewStatus', 'sourceFingerprint', 'contentFingerprint', 'visibility', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['questionId', 'subjectSlug', 'topicSlug', 'subtopicSlug', 'examFileId', 'examYear', 'questionNumber', 'originalText', 'correctionSuggestion', 'options', 'media', 'sourcePage', 'classificationConfidence', 'classificationReason', 'reviewStatus', 'reviewNote', 'sourceFingerprint', 'contentFingerprint', 'visibility', 'createdAt', 'updatedAt'])
+        && data.questionId is int && data.questionId > 0
+        && (!('subjectSlug' in data) || data.subjectSlug in ['informatika', 'mentiq'])
+        && (!('topicSlug' in data) || isValidString(data.topicSlug, 1, 96))
+        && (!('subtopicSlug' in data) || isValidString(data.subtopicSlug, 1, 96))
+        && data.examFileId is int && data.examFileId > 0
+        && (!('examYear' in data) || (data.examYear is int && data.examYear >= 1900 && data.examYear <= 2100))
+        && (!('questionNumber' in data) || (data.questionNumber is int && data.questionNumber > 0))
+        && isValidString(data.originalText, 1, 12000)
+        && (!('correctionSuggestion' in data) || isValidString(data.correctionSuggestion, 1, 12000))
+        && data.options is list && data.options.size() <= 10
+        && (data.options.size() == 0 || data.options[0] is map)
+        && (!('media' in data) || (data.media is list && data.media.size() <= 20 && (data.media.size() == 0 || data.media[0] is map)))
+        && (!('sourcePage' in data) || (data.sourcePage is int && data.sourcePage > 0))
+        && (!('classificationConfidence' in data) || (data.classificationConfidence is number && data.classificationConfidence >= 0 && data.classificationConfidence <= 1))
+        && (!('classificationReason' in data) || isValidString(data.classificationReason, 1, 2000))
+        && data.reviewStatus in ['checked', 'needs_review']
+        && (!('reviewNote' in data) || isValidString(data.reviewNote, 1, 2000))
+        && isValidString(data.sourceFingerprint, 1, 96)
+        && isValidString(data.contentFingerprint, 64, 64)
+        && isValidPublicCatalogDoc(data);
+    }
+
+    function isValidQuestionAnswerSecret(data) {
+      return data.keys().hasAll(['questionId', 'correctOption', 'correctAnswerSource', 'updatedBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['questionId', 'correctOption', 'correctAnswerSource', 'updatedBy', 'createdAt', 'updatedAt'])
+        && data.questionId is int && data.questionId > 0
+        && isValidString(data.correctOption, 1, 8)
+        && isValidString(data.correctAnswerSource, 1, 1000)
+        && isValidId(data.updatedBy)
+        && data.updatedBy == request.auth.uid
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidStudyAttempt(data, userId) {
+      return data.keys().hasAll(['userId', 'subjectSlug', 'topicSlug', 'totalQuestions', 'scoredQuestions', 'correctCount', 'incorrectCount', 'unscoredCount', 'status', 'createdAt'])
+        && data.keys().hasOnly(['userId', 'subjectSlug', 'topicSlug', 'examYear', 'totalQuestions', 'scoredQuestions', 'correctCount', 'incorrectCount', 'unscoredCount', 'scorePercent', 'status', 'createdAt'])
+        && isValidId(data.userId)
+        && data.userId == userId
+        && data.userId == request.auth.uid
+        && data.subjectSlug in ['informatika', 'mentiq']
+        && isValidString(data.topicSlug, 1, 96)
+        && (!('examYear' in data) || (data.examYear is int && data.examYear >= 1900 && data.examYear <= 2100))
+        && data.totalQuestions is int && data.totalQuestions > 0 && data.totalQuestions <= 200
+        && data.scoredQuestions is int && data.scoredQuestions >= 0 && data.scoredQuestions <= data.totalQuestions
+        && data.correctCount is int && data.correctCount >= 0 && data.correctCount <= data.totalQuestions
+        && data.incorrectCount is int && data.incorrectCount >= 0 && data.incorrectCount <= data.totalQuestions
+        && data.unscoredCount is int && data.unscoredCount >= 0 && data.unscoredCount <= data.totalQuestions
+        && (!('scorePercent' in data) || (data.scorePercent is int && data.scorePercent >= 0 && data.scorePercent <= 100))
+        && data.status == 'submitted'
+        && data.createdAt is timestamp;
+    }
+
+    function isValidAnswerKeyFile(data) {
+      return data.keys().hasAll(['filename', 'sha256', 'fileSize', 'subjectSlug', 'years', 'entryCount', 'processingStatus', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['filename', 'sha256', 'fileSize', 'subjectSlug', 'years', 'entryCount', 'processingStatus', 'statusMessage', 'createdAt', 'updatedAt'])
+        && isValidString(data.filename, 1, 255)
+        && isValidString(data.sha256, 64, 64)
+        && data.fileSize is int && data.fileSize > 0
+        && data.subjectSlug in ['informatika', 'mentiq']
+        && data.years is list && data.years.size() <= 10
+        && (data.years.size() == 0 || data.years[0] is int)
+        && data.entryCount is int && data.entryCount >= 0
+        && data.processingStatus in ['uploaded', 'processing', 'completed', 'needs_review', 'failed']
+        && (!('statusMessage' in data) || isValidString(data.statusMessage, 1, 1000))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAnswerKeyEntry(data, fileId) {
+      return data.keys().hasAll(['answerKeyFileId', 'subjectSlug', 'answerToken', 'confidence', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['answerKeyFileId', 'subjectSlug', 'examYear', 'questionNumber', 'answerToken', 'suggestedOption', 'confidence', 'sourcePage', 'status', 'matchedQuestionId', 'reviewNote', 'createdAt', 'updatedAt'])
+        && isValidId(data.answerKeyFileId)
+        && data.answerKeyFileId == fileId
+        && data.subjectSlug in ['informatika', 'mentiq']
+        && (!('examYear' in data) || (data.examYear is int && data.examYear >= 1900 && data.examYear <= 2100))
+        && (!('questionNumber' in data) || (data.questionNumber is int && data.questionNumber > 0))
+        && isValidString(data.answerToken, 1, 32)
+        && (!('suggestedOption' in data) || isValidString(data.suggestedOption, 1, 8))
+        && data.confidence is number && data.confidence >= 0 && data.confidence <= 1
+        && (!('sourcePage' in data) || (data.sourcePage is int && data.sourcePage > 0))
+        && data.status in ['applied', 'already_set', 'needs_review', 'unmatched', 'ambiguous', 'conflict', 'dismissed']
+        && (!('matchedQuestionId' in data) || (data.matchedQuestionId is int && data.matchedQuestionId > 0))
+        && (!('reviewNote' in data) || isValidString(data.reviewNote, 1, 2000))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // --- Collection Rules ---
+
+    // Boot-time connectivity check document (read-only ping)
+    match /test/connection {
+      allow get: if true;
+      allow list, write: if false;
+    }
+
+    // Public minimal user profiles (no PII)
+    match /users/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isAdmin();
+
+      allow create: if isEmailVerified()
+        && isValidId(userId)
+        && isOwner(userId)
+        && isValidUserPublicProfile(incoming(), userId)
+        && incoming().role == 'user'
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isEmailVerified()
+        && isValidId(userId)
+        && isValidUserPublicProfile(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'role', 'updatedAt'])) ||
+          (isOwner(userId) && incoming().role == existing().role && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'updatedAt']))
+        );
+
+      allow delete: if isAdmin() && isValidId(userId);
+
+      // Isolated PII subcollection (email)
+      match /private/info {
+        allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+        allow list: if false;
+
+        allow create: if isEmailVerified()
+          && isValidId(userId)
+          && isOwner(userId)
+          && exists(/databases/$(database)/documents/users/$(userId))
+          && isValidUserPrivateInfo(incoming(), userId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+
+        allow update: if isEmailVerified()
+          && isValidId(userId)
+          && isValidUserPrivateInfo(incoming(), userId)
+          && incoming().uid == existing().uid
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (isOwner(userId) || isAdmin())
+          && incoming().diff(existing()).affectedKeys().hasOnly(['email', 'updatedAt']);
+
+        allow delete: if isAdmin() && isValidId(userId);
+      }
+
+      // Learner practice attempts subcollection
+      match /attempts/{attemptId} {
+        allow get: if isValidId(userId) && isValidId(attemptId) && (isOwner(userId) || isAdmin());
+        allow list: if isValidId(userId) && ((isSignedIn() && resource.data.userId == request.auth.uid && request.auth.uid == userId) || isAdmin());
+
+        allow create: if isEmailVerified()
+          && isValidId(userId)
+          && isValidId(attemptId)
+          && isOwner(userId)
+          && exists(/databases/$(database)/documents/users/$(userId))
+          && isValidStudyAttempt(incoming(), userId)
+          && incoming().createdAt == request.time;
+
+        // Terminal state locked ('submitted'); only admin can correct scored counts
+        allow update: if isAdmin()
+          && isValidId(userId)
+          && isValidId(attemptId)
+          && isValidStudyAttempt(incoming(), userId)
+          && incoming().userId == existing().userId
+          && incoming().createdAt == existing().createdAt
+          && incoming().diff(existing()).affectedKeys().hasOnly(['totalQuestions', 'scoredQuestions', 'correctCount', 'incorrectCount', 'unscoredCount', 'scorePercent']);
+
+        allow delete: if isValidId(userId) && isValidId(attemptId) && (isOwner(userId) || isAdmin());
+      }
+    }
+
+    // Trusted admin registry
+    match /admins/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isAdmin()
+        && isValidId(userId)
+        && isValidAdminMembership(incoming(), userId)
+        && incoming().createdAt == request.time;
+      allow update: if false;
+      allow delete: if isAdmin() && isValidId(userId);
+    }
+
+    // Public entrance exam catalog & questions (admin-only writes)
+    match /subjects/{subjectId} {
+      allow get: if isValidId(subjectId) && (resource.data.visibility == 'public' || isAdmin());
+      allow list: if resource.data.visibility == 'public' || isAdmin();
+      allow create: if isAdmin()
+        && isValidId(subjectId)
+        && isValidSubjectCatalog(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isAdmin()
+        && isValidId(subjectId)
+        && isValidSubjectCatalog(incoming())
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'sortOrder', 'updatedAt']);
+      allow delete: if isAdmin() && isValidId(subjectId);
+    }
+
+    match /topics/{topicId} {
+      allow get: if isValidId(topicId) && (resource.data.visibility == 'public' || isAdmin());
+      allow list: if resource.data.visibility == 'public' || isAdmin();
+      allow create: if isAdmin()
+        && isValidId(topicId)
+        && isValidTopicCatalog(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isAdmin()
+        && isValidId(topicId)
+        && isValidTopicCatalog(incoming())
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'isActive', 'sortOrder', 'updatedAt']);
+      allow delete: if isAdmin() && isValidId(topicId);
+    }
+
+    match /examFiles/{examFileId} {
+      allow get: if isValidId(examFileId) && (resource.data.visibility == 'public' || isAdmin());
+      allow list: if resource.data.visibility == 'public' || isAdmin();
+      allow create: if isAdmin()
+        && isValidId(examFileId)
+        && isValidExamFile(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isAdmin()
+        && isValidId(examFileId)
+        && isValidExamFile(incoming())
+        && incoming().sha256 == existing().sha256
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['questionCount', 'processingStatus', 'updatedAt']);
+      allow delete: if isAdmin() && isValidId(examFileId);
+    }
+
+    match /questions/{questionId} {
+      allow get: if isValidId(questionId) && (resource.data.visibility == 'public' || isAdmin());
+      allow list: if resource.data.visibility == 'public' || isAdmin();
+      allow create: if isAdmin()
+        && isValidId(questionId)
+        && isValidQuestion(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isAdmin()
+        && isValidId(questionId)
+        && isValidQuestion(incoming())
+        && incoming().questionId == existing().questionId
+        && incoming().sourceFingerprint == existing().sourceFingerprint
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['subjectSlug', 'topicSlug', 'subtopicSlug', 'correctionSuggestion', 'reviewStatus', 'reviewNote', 'updatedAt']);
+      allow delete: if isAdmin() && isValidId(questionId);
+    }
+
+    // Strictly admin-only answer key secrets
+    match /questionAnswers/{questionId} {
+      allow get: if isValidId(questionId) && isAdmin();
+      allow list: if isAdmin();
+      allow create: if isAdmin()
+        && isValidId(questionId)
+        && isValidQuestionAnswerSecret(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isAdmin()
+        && isValidId(questionId)
+        && isValidQuestionAnswerSecret(incoming())
+        && incoming().questionId == existing().questionId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['correctOption', 'correctAnswerSource', 'updatedBy', 'updatedAt']);
+      allow delete: if isAdmin() && isValidId(questionId);
+    }
+
+    // Strictly admin-only answer key PDFs and review queue entries
+    match /answerKeyFiles/{fileId} {
+      allow get: if isValidId(fileId) && isAdmin();
+      allow list: if isAdmin();
+      allow create: if isAdmin()
+        && isValidId(fileId)
+        && isValidAnswerKeyFile(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isAdmin()
+        && isValidId(fileId)
+        && isValidAnswerKeyFile(incoming())
+        && incoming().sha256 == existing().sha256
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['years', 'entryCount', 'processingStatus', 'statusMessage', 'updatedAt']);
+      allow delete: if isAdmin() && isValidId(fileId);
+
+      match /entries/{entryId} {
+        allow get: if isValidId(fileId) && isValidId(entryId) && isAdmin();
+        allow list: if isValidId(fileId) && isAdmin();
+        allow create: if isAdmin()
+          && isValidId(fileId)
+          && isValidId(entryId)
+          && exists(/databases/$(database)/documents/answerKeyFiles/$(fileId))
+          && isValidAnswerKeyEntry(incoming(), fileId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isAdmin()
+          && isValidId(fileId)
+          && isValidId(entryId)
+          && isValidAnswerKeyEntry(incoming(), fileId)
+          && incoming().answerKeyFileId == existing().answerKeyFileId
+          && existing().status in ['needs_review', 'unmatched', 'ambiguous', 'conflict']
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'matchedQuestionId', 'reviewNote', 'updatedAt']);
+        allow delete: if isAdmin() && isValidId(fileId) && isValidId(entryId);
+      }
+    }
+  }
+}

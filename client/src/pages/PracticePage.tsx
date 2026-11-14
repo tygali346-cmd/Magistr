@@ -5,6 +5,7 @@ import AppShell from "@/components/AppShell";
 import ExpandableText from "@/components/ExpandableText";
 import QuestionMediaBlock from "@/components/QuestionMediaBlock";
 import { trpc } from "@/lib/trpc";
+import { useFirebase } from "@/contexts/FirebaseContext";
 import { errorMessage, getLearnerKey, type QuestionRecord, type TopicRecord } from "@/lib/study";
 
 type PracticeQuestion = Omit<QuestionRecord, "correctOption" | "correctAnswerSource">;
@@ -30,10 +31,12 @@ export default function PracticePage() {
   const [starting, setStarting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
+  const { firebaseUser, attempts, saveAttemptToFirestore } = useFirebase();
   const practiceQuery = trpc.questionBank.practiceQuestions.useQuery({ subjectSlug, topicSlug, examYear: year ? Number(year) : undefined, limit: 200 }, { enabled: !!topic });
   const startAttemptMutation = trpc.questionBank.startAttempt.useMutation();
   const saveAttempt = trpc.questionBank.saveAttempt.useMutation();
   const practiceQuestions = (practiceQuery.data ?? []) as PracticeQuestion[];
+  const topicAttemptsCount = useMemo(() => attempts.filter(attempt => attempt.topicSlug === topicSlug).length, [attempts, topicSlug]);
   const years = [...new Set((examsQuery.data ?? []).flatMap(file => file.years ?? []))].sort((a, b) => b - a);
   const current = practiceQuestions[step];
   const resultByQuestion = useMemo(() => new Map((result?.answers ?? []).map(answer => [answer.questionId, answer])), [result]);
@@ -77,9 +80,27 @@ export default function PracticePage() {
         learnerKey: getLearnerKey(), sessionToken,
         answers: practiceQuestions.map(question => ({ questionId: question.id, selectedOption: answers[question.id] ?? null })),
       });
-      setResult(response as AttemptResult);
+      const typedResult = response as AttemptResult;
+      setResult(typedResult);
       setSessionToken("");
       setStarted(false);
+      if (firebaseUser?.emailVerified) {
+        try {
+          await saveAttemptToFirestore({
+            subjectSlug: subjectSlug as "informatika" | "mentiq",
+            topicSlug,
+            examYear: year ? Number(year) : null,
+            totalQuestions: typedResult.totalQuestions,
+            scoredQuestions: typedResult.scoredQuestions,
+            correctCount: typedResult.correctCount,
+            incorrectCount: typedResult.incorrectCount,
+            unscoredCount: typedResult.unscoredCount,
+            scorePercent: typedResult.scorePercent,
+          });
+        } catch (firestoreError) {
+          console.error(firestoreError);
+        }
+      }
     } catch (error) {
       setSaveError(errorMessage(error, "Nəticə saxlanmadı. Yenidən cəhd edin."));
     } finally {
@@ -140,7 +161,12 @@ export default function PracticePage() {
             const answer = resultByQuestion.get(question.id);
             return <div className="card review-card" key={question.id}><div className="question-tags"><span className="question-number">Sual {question.questionNumber}</span><span className="tag warning"><X size={12} /> Səhv</span></div><ExpandableText text={question.originalText} /><p className="caption">Seçiminiz: {answer?.selectedOption ?? "Cavab seçilməyib"} · Təsdiqlənmiş cavab: {answer?.verifiedCorrectOption ?? "—"}</p></div>;
           })}</div></> : <div className="notice-box">Yoxlanmış suallar arasında səhv cavab yoxdur.</div>}
-          <p className="caption" style={{ marginTop: 14 }}>Bu nəticə anonim brauzer açarınızla saxlanıb. Nəticələr hesablananda düzgün cavabı məlum olmayan suallar çıxarılır.</p>
+          <p className="caption" style={{ marginTop: 14 }}>
+            {firebaseUser?.emailVerified
+              ? `Bu nəticə hesabınıza saxlanılıb${topicAttemptsCount > 0 ? ` · bu mövzuda ${topicAttemptsCount} cəhd` : ""}. `
+              : "Bu nəticə anonim brauzer açarınızla saxlanıb. "}
+            Nəticələr hesablananda düzgün cavabı məlum olmayan suallar çıxarılır.
+          </p>
         </section>}
       </div>}
     </AppShell>

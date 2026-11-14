@@ -1,3 +1,5 @@
+import type { Content, Part, Tool as GeminiTool } from "@google/genai";
+import { createGeminiClient, GEMINI_STANDARD_MODEL } from "../gemini";
 import { ENV } from "./env";
 
 export type Role = "system" | "user" | "assistant" | "tool" | "function";
@@ -19,7 +21,7 @@ export type FileContent = {
   type: "file_url";
   file_url: {
     url: string;
-    mime_type?: "audio/mpeg" | "audio/wav" | "application/pdf" | "audio/mp4" | "video/mp4" ;
+    mime_type?: "audio/mpeg" | "audio/wav" | "application/pdf" | "audio/mp4" | "video/mp4";
   };
 };
 
@@ -114,231 +116,89 @@ export type ResponseFormat =
   | { type: "json_schema"; json_schema: JsonSchema };
 
 const ensureArray = (
-  value: MessageContent | MessageContent[]
+  value: MessageContent | MessageContent[],
 ): MessageContent[] => (Array.isArray(value) ? value : [value]);
 
-const normalizeContentPart = (
-  part: MessageContent
-): TextContent | ImageContent | FileContent => {
-  if (typeof part === "string") {
-    return { type: "text", text: part };
-  }
-
-  if (part.type === "text") {
-    return part;
-  }
-
-  if (part.type === "image_url") {
-    return part;
-  }
-
-  if (part.type === "file_url") {
-    return part;
-  }
-
-  throw new Error("Unsupported message content part");
-};
-
-const normalizeMessage = (message: Message) => {
-  const { role, name, tool_call_id } = message;
-
-  if (role === "tool" || role === "function") {
-    const content = ensureArray(message.content)
-      .map(part => (typeof part === "string" ? part : JSON.stringify(part)))
-      .join("\n");
-
-    return {
-      role,
-      name,
-      tool_call_id,
-      content,
-    };
-  }
-
-  const contentParts = ensureArray(message.content).map(normalizeContentPart);
-
-  // If there's only text content, collapse to a single string for compatibility
-  if (contentParts.length === 1 && contentParts[0].type === "text") {
-    return {
-      role,
-      name,
-      content: contentParts[0].text,
-    };
-  }
-
-  return {
-    role,
-    name,
-    content: contentParts,
-  };
-};
-
-const normalizeToolChoice = (
-  toolChoice: ToolChoice | undefined,
-  tools: Tool[] | undefined
-): "none" | "auto" | ToolChoiceExplicit | undefined => {
-  if (!toolChoice) return undefined;
-
-  if (toolChoice === "none" || toolChoice === "auto") {
-    return toolChoice;
-  }
-
-  if (toolChoice === "required") {
-    if (!tools || tools.length === 0) {
-      throw new Error(
-        "tool_choice 'required' was provided but no tools were configured"
-      );
-    }
-
-    if (tools.length > 1) {
-      throw new Error(
-        "tool_choice 'required' needs a single tool or specify the tool name explicitly"
-      );
-    }
-
-    return {
-      type: "function",
-      function: { name: tools[0].function.name },
-    };
-  }
-
-  if ("name" in toolChoice) {
-    return {
-      type: "function",
-      function: { name: toolChoice.name },
-    };
-  }
-
-  return toolChoice;
-};
-
-const platformApiBase = () => {
-  if (!ENV.forgeApiUrl.trim()) throw new Error("MANUS_API_URL is not configured");
-  return ENV.forgeApiUrl.replace(/\/$/, "");
-};
-const resolveApiUrl = () => `${platformApiBase()}/v1/chat/completions`;
-
 const assertApiKey = () => {
-  if (!ENV.forgeApiKey) {
-    throw new Error("MANUS_API_KEY is not configured");
+  if (!ENV.geminiApiKey.trim()) {
+    throw new Error("GEMINI_API_KEY is not configured");
   }
 };
 
-const normalizeResponseFormat = ({
-  responseFormat,
-  response_format,
-  outputSchema,
-  output_schema,
-}: {
-  responseFormat?: ResponseFormat;
-  response_format?: ResponseFormat;
-  outputSchema?: OutputSchema;
-  output_schema?: OutputSchema;
-}):
-  | { type: "json_schema"; json_schema: JsonSchema }
-  | { type: "text" }
-  | { type: "json_object" }
-  | undefined => {
-  const explicitFormat = responseFormat || response_format;
-  if (explicitFormat) {
-    if (
-      explicitFormat.type === "json_schema" &&
-      !explicitFormat.json_schema?.schema
-    ) {
-      throw new Error(
-        "responseFormat json_schema requires a defined schema object"
-      );
+function parseDataUrl(url: string): { mimeType: string; data: string } | null {
+  const match = url.match(/^data:([^;]+);base64,(.+)$/);
+  if (!match) return null;
+  return { mimeType: match[1], data: match[2] };
+}
+
+async function toGeminiPart(part: MessageContent): Promise<Part> {
+  if (typeof part === "string") {
+    return { text: part };
+  }
+  if (part.type === "text") {
+    return { text: part.text };
+  }
+  if (part.type === "image_url") {
+    const inline = parseDataUrl(part.image_url.url);
+    if (inline) {
+      return { inlineData: inline };
     }
-    return explicitFormat;
+    const resp = await fetch(part.image_url.url);
+    if (!resp.ok) {
+      throw new Error(`Failed to fetch image (${resp.status})`);
+    }
+    const mimeType = resp.headers.get("content-type") || "image/png";
+    const data = Buffer.from(await resp.arrayBuffer()).toString("base64");
+    return { inlineData: { mimeType, data } };
   }
-
-  const schema = outputSchema || output_schema;
-  if (!schema) return undefined;
-
-  if (!schema.name || !schema.schema) {
-    throw new Error("outputSchema requires both name and schema");
+  if (part.type === "file_url") {
+    const inline = parseDataUrl(part.file_url.url);
+    if (inline) {
+      return { inlineData: inline };
+    }
+    const resp = await fetch(part.file_url.url);
+    if (!resp.ok) {
+      throw new Error(`Failed to fetch file (${resp.status})`);
+    }
+    const mimeType = part.file_url.mime_type || resp.headers.get("content-type") || "application/octet-stream";
+    const data = Buffer.from(await resp.arrayBuffer()).toString("base64");
+    return { inlineData: { mimeType, data } };
   }
+  throw new Error("Unsupported message content part");
+}
 
-  return {
-    type: "json_schema",
-    json_schema: {
-      name: schema.name,
-      schema: schema.schema,
-      ...(typeof schema.strict === "boolean" ? { strict: schema.strict } : {}),
-    },
-  };
-};
-
-const RETRY_MAX_RETRIES = 4;
+const RETRY_MAX_RETRIES = 3;
 const RETRY_BASE_DELAY_MS = 500;
-const RETRY_MAX_DELAY_MS = 30_000;
-
-type FetchInit = NonNullable<Parameters<typeof fetch>[1]>;
+const RETRY_MAX_DELAY_MS = 10_000;
 
 const sleep = (ms: number) =>
   new Promise<void>(resolve => setTimeout(resolve, ms));
 
-const parseRetryAfter = (value: string | null): number | undefined => {
-  if (!value) return undefined;
-  const seconds = Number(value);
-  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
-  const at = Date.parse(value);
-  return Number.isNaN(at) ? undefined : Math.max(0, at - Date.now());
-};
+function isRetryableError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const status = (error as { status?: unknown }).status;
+  if (typeof status === "number") {
+    return status === 429 || status >= 500;
+  }
+  return false;
+}
 
-// Equal-jitter exponential backoff. The cap/2 floor guarantees a minimum
-// delay so a misbehaving caller loop slows down instead of hammering the
-// upstream while it keeps returning errors.
-const computeBackoffDelay = (
-  attempt: number,
-  retryAfterMs?: number
-): number => {
-  const cap = Math.min(RETRY_BASE_DELAY_MS * 2 ** attempt, RETRY_MAX_DELAY_MS);
-  const jittered = cap / 2 + Math.random() * (cap / 2);
-  return Math.min(Math.max(jittered, retryAfterMs ?? 0), RETRY_MAX_DELAY_MS);
-};
-
-// Retries non-2xx responses and network errors with exponential backoff, then
-// returns the final Response so callers keep their existing error handling.
-const fetchWithBackoff = async (
-  url: string,
-  init: FetchInit
-): Promise<Response> => {
+async function withBackoff<T>(fn: () => Promise<T>): Promise<T> {
   let lastError: unknown;
-
   for (let attempt = 0; attempt <= RETRY_MAX_RETRIES; attempt++) {
     try {
-      const response = await fetch(url, init);
-      if (response.ok || attempt === RETRY_MAX_RETRIES) {
-        return response;
-      }
-
-      const retryAfterMs = parseRetryAfter(
-        response.headers.get("retry-after")
-      );
-      try {
-        await response.body?.cancel();
-      } catch {
-        // Body already settled; nothing to clean up.
-      }
-      console.warn(
-        `LLM request retry ${attempt + 1}/${RETRY_MAX_RETRIES} after status ${response.status}`
-      );
-      await sleep(computeBackoffDelay(attempt, retryAfterMs));
+      return await fn();
     } catch (error) {
       lastError = error;
-      if (attempt === RETRY_MAX_RETRIES) throw error;
-      console.warn(
-        `LLM request retry ${attempt + 1}/${RETRY_MAX_RETRIES} after network error`
-      );
-      await sleep(computeBackoffDelay(attempt));
+      if (attempt === RETRY_MAX_RETRIES || !isRetryableError(error)) {
+        throw error;
+      }
+      const cap = Math.min(RETRY_BASE_DELAY_MS * 2 ** attempt, RETRY_MAX_DELAY_MS);
+      await sleep(cap / 2 + Math.random() * (cap / 2));
     }
   }
-
-  throw lastError instanceof Error
-    ? lastError
-    : new Error("LLM request failed after exhausting retries");
-};
+  throw lastError instanceof Error ? lastError : new Error("Gemini request failed");
+}
 
 export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
   assertApiKey();
@@ -346,79 +206,120 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
   const {
     messages,
     tools,
-    toolChoice,
-    tool_choice,
     outputSchema,
     output_schema,
     responseFormat,
     response_format,
     model,
-    thinking,
-    reasoning,
     maxTokens,
     max_tokens,
   } = params;
 
-  const payload: Record<string, unknown> = {
-    messages: messages.map(normalizeMessage),
-  };
+  const systemParts: string[] = [];
+  const contents: Content[] = [];
 
-  if (model) {
-    payload.model = model;
+  for (const msg of messages) {
+    const items = ensureArray(msg.content);
+    if (msg.role === "system") {
+      for (const item of items) {
+        systemParts.push(typeof item === "string" ? item : item.type === "text" ? item.text : JSON.stringify(item));
+      }
+      continue;
+    }
+
+    const parts: Part[] = [];
+    for (const item of items) {
+      parts.push(await toGeminiPart(item));
+    }
+
+    contents.push({
+      role: msg.role === "assistant" ? "model" : "user",
+      parts,
+    });
   }
 
-  if (tools && tools.length > 0) {
-    payload.tools = tools;
-  }
+  const explicitFormat = responseFormat || response_format;
+  const schemaWrapper = outputSchema || output_schema;
 
-  const normalizedToolChoice = normalizeToolChoice(
-    toolChoice || tool_choice,
-    tools
-  );
-  if (normalizedToolChoice) {
-    payload.tool_choice = normalizedToolChoice;
+  const config: Record<string, unknown> = {};
+  if (systemParts.length > 0) {
+    config.systemInstruction = systemParts.join("\n\n");
   }
 
   const resolvedMaxTokens = max_tokens ?? maxTokens;
   if (typeof resolvedMaxTokens === "number") {
-    payload.max_tokens = resolvedMaxTokens;
+    config.maxOutputTokens = resolvedMaxTokens;
   }
 
-  if (thinking) {
-    payload.thinking = thinking;
-  }
-  if (reasoning) {
-    payload.reasoning = reasoning;
-  }
-
-  const normalizedResponseFormat = normalizeResponseFormat({
-    responseFormat,
-    response_format,
-    outputSchema,
-    output_schema,
-  });
-
-  if (normalizedResponseFormat) {
-    payload.response_format = normalizedResponseFormat;
+  if (explicitFormat?.type === "json_object") {
+    config.responseMimeType = "application/json";
+  } else if (explicitFormat?.type === "json_schema" && explicitFormat.json_schema?.schema) {
+    config.responseMimeType = "application/json";
+    config.responseJsonSchema = explicitFormat.json_schema.schema;
+  } else if (schemaWrapper?.schema) {
+    config.responseMimeType = "application/json";
+    config.responseJsonSchema = schemaWrapper.schema;
   }
 
-  const response = await fetchWithBackoff(resolveApiUrl(), {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${ENV.forgeApiKey}`,
+  if (tools && tools.length > 0) {
+    const geminiTools: GeminiTool[] = [
+      {
+        functionDeclarations: tools.map(tool => ({
+          name: tool.function.name,
+          description: tool.function.description,
+          parametersJsonSchema: tool.function.parameters,
+        })),
+      },
+    ];
+    config.tools = geminiTools;
+  }
+
+  const resolvedModel = model || GEMINI_STANDARD_MODEL;
+  const ai = createGeminiClient();
+  const response = await withBackoff(() =>
+    ai.models.generateContent({
+      model: resolvedModel,
+      contents,
+      config,
+    }),
+  );
+
+  const toolCalls: ToolCall[] = (response.functionCalls ?? []).map((call, idx) => ({
+    id: call.id || `call_${idx + 1}`,
+    type: "function",
+    function: {
+      name: call.name || "",
+      arguments: JSON.stringify(call.args ?? {}),
     },
-    body: JSON.stringify(payload),
-  });
+  }));
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(
-      `LLM invoke failed: ${response.status} ${response.statusText} – ${errorText}`
-    );
-  }
+  const usage = response.usageMetadata;
 
-  return (await response.json()) as InvokeResult;
+  return {
+    id: response.responseId || `gemini-${Date.now()}`,
+    created: Math.floor(Date.now() / 1000),
+    model: resolvedModel,
+    choices: [
+      {
+        index: 0,
+        message: {
+          role: "assistant",
+          content: response.text ?? "",
+          ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+        },
+        finish_reason: toolCalls.length > 0 ? "tool_calls" : "stop",
+      },
+    ],
+    ...(usage
+      ? {
+          usage: {
+            prompt_tokens: usage.promptTokenCount ?? 0,
+            completion_tokens: usage.candidatesTokenCount ?? 0,
+            total_tokens: usage.totalTokenCount ?? 0,
+          },
+        }
+      : {}),
+  };
 }
 
 export type ModelInfo = {
@@ -436,18 +337,22 @@ export type ModelsResponse = {
 export async function listLLMModels(): Promise<ModelsResponse> {
   assertApiKey();
 
-  const url = `${platformApiBase()}/v1/models`;
+  const ai = createGeminiClient();
+  const pager = await ai.models.list();
+  const data: ModelInfo[] = [];
 
-  const response = await fetchWithBackoff(url, {
-    headers: { authorization: `Bearer ${ENV.forgeApiKey}` },
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(
-      `List LLM models failed: ${response.status} ${response.statusText} – ${errorText}`
-    );
+  for await (const model of pager) {
+    if (!model.name) continue;
+    data.push({
+      id: model.name.replace(/^models\//, ""),
+      object: "model",
+      created: 0,
+      owned_by: "google",
+    });
   }
 
-  return (await response.json()) as ModelsResponse;
+  return {
+    object: "list",
+    data,
+  };
 }

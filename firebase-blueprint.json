@@ -1,0 +1,551 @@
+{
+  "entities": {
+    "UserPublicProfile": {
+      "title": "UserPublicProfile",
+      "description": "Publicly minimal user profile document without PII.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Authentication user UID."
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Display name shown inside the signed-in profile."
+        },
+        "role": {
+          "type": "string",
+          "enum": ["user", "admin"],
+          "description": "Application role assigned by server/admin only."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when user profile was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of latest update."
+        }
+      },
+      "required": ["uid", "displayName", "role", "createdAt", "updatedAt"]
+    },
+    "UserPrivateInfo": {
+      "title": "UserPrivateInfo",
+      "description": "Isolated PII document storing the authenticated user's email address.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "minLength": 3,
+          "maxLength": 320
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "email", "createdAt", "updatedAt"]
+    },
+    "AdminMembership": {
+      "title": "AdminMembership",
+      "description": "Trusted admin registry keyed by Firebase UID.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "createdAt"]
+    },
+    "SubjectCatalog": {
+      "title": "SubjectCatalog",
+      "description": "Fixed entrance exam subject entry (İnformatika or Məntiq).",
+      "type": "object",
+      "properties": {
+        "slug": {
+          "type": "string",
+          "enum": ["informatika", "mentiq"]
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "sortOrder": {
+          "type": "integer"
+        },
+        "visibility": {
+          "type": "string",
+          "enum": ["public"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["slug", "name", "sortOrder", "visibility", "createdAt", "updatedAt"]
+    },
+    "TopicCatalog": {
+      "title": "TopicCatalog",
+      "description": "Fixed entrance exam topic or subtopic entry.",
+      "type": "object",
+      "properties": {
+        "subjectSlug": {
+          "type": "string",
+          "enum": ["informatika", "mentiq"]
+        },
+        "slug": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 96,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "numberLabel": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 16
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "parentSlug": {
+          "type": "string",
+          "maxLength": 96
+        },
+        "sortOrder": {
+          "type": "integer"
+        },
+        "isActive": {
+          "type": "boolean"
+        },
+        "visibility": {
+          "type": "string",
+          "enum": ["public"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["subjectSlug", "slug", "numberLabel", "name", "sortOrder", "isActive", "visibility", "createdAt", "updatedAt"]
+    },
+    "ExamFileRecord": {
+      "title": "ExamFileRecord",
+      "description": "Metadata for an archived entrance exam PDF source.",
+      "type": "object",
+      "properties": {
+        "filename": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "sourceUrl": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "sha256": {
+          "type": "string",
+          "minLength": 64,
+          "maxLength": 64
+        },
+        "fileSize": {
+          "type": "integer"
+        },
+        "mimeType": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "years": {
+          "type": "array"
+        },
+        "questionCount": {
+          "type": "integer"
+        },
+        "processingStatus": {
+          "type": "string",
+          "enum": ["uploaded", "processing", "completed", "needs_review", "failed"]
+        },
+        "visibility": {
+          "type": "string",
+          "enum": ["public"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["filename", "title", "sourceUrl", "sha256", "fileSize", "mimeType", "years", "questionCount", "processingStatus", "visibility", "createdAt", "updatedAt"]
+    },
+    "QuestionRecord": {
+      "title": "QuestionRecord",
+      "description": "Public entrance exam question without verified answer key.",
+      "type": "object",
+      "properties": {
+        "questionId": {
+          "type": "integer"
+        },
+        "subjectSlug": {
+          "type": "string",
+          "enum": ["informatika", "mentiq"]
+        },
+        "topicSlug": {
+          "type": "string",
+          "maxLength": 96
+        },
+        "subtopicSlug": {
+          "type": "string",
+          "maxLength": 96
+        },
+        "examFileId": {
+          "type": "integer"
+        },
+        "examYear": {
+          "type": "integer"
+        },
+        "questionNumber": {
+          "type": "integer"
+        },
+        "originalText": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 12000
+        },
+        "correctionSuggestion": {
+          "type": "string",
+          "maxLength": 12000
+        },
+        "options": {
+          "type": "array"
+        },
+        "media": {
+          "type": "array"
+        },
+        "sourcePage": {
+          "type": "integer"
+        },
+        "classificationConfidence": {
+          "type": "number"
+        },
+        "classificationReason": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "reviewStatus": {
+          "type": "string",
+          "enum": ["checked", "needs_review"]
+        },
+        "reviewNote": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "sourceFingerprint": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 96
+        },
+        "contentFingerprint": {
+          "type": "string",
+          "minLength": 64,
+          "maxLength": 64
+        },
+        "visibility": {
+          "type": "string",
+          "enum": ["public"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["questionId", "examFileId", "originalText", "options", "reviewStatus", "sourceFingerprint", "contentFingerprint", "visibility", "createdAt", "updatedAt"]
+    },
+    "QuestionAnswerSecret": {
+      "title": "QuestionAnswerSecret",
+      "description": "Admin-only verified answer key and source citation for a question.",
+      "type": "object",
+      "properties": {
+        "questionId": {
+          "type": "integer"
+        },
+        "correctOption": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8
+        },
+        "correctAnswerSource": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "updatedBy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["questionId", "correctOption", "correctAnswerSource", "updatedBy", "createdAt", "updatedAt"]
+    },
+    "StudyAttemptRecord": {
+      "title": "StudyAttemptRecord",
+      "description": "Completed practice test attempt saved under an authenticated learner profile.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "subjectSlug": {
+          "type": "string",
+          "enum": ["informatika", "mentiq"]
+        },
+        "topicSlug": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 96
+        },
+        "examYear": {
+          "type": "integer"
+        },
+        "totalQuestions": {
+          "type": "integer"
+        },
+        "scoredQuestions": {
+          "type": "integer"
+        },
+        "correctCount": {
+          "type": "integer"
+        },
+        "incorrectCount": {
+          "type": "integer"
+        },
+        "unscoredCount": {
+          "type": "integer"
+        },
+        "scorePercent": {
+          "type": "integer"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["submitted"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["userId", "subjectSlug", "topicSlug", "totalQuestions", "scoredQuestions", "correctCount", "incorrectCount", "unscoredCount", "status", "createdAt"]
+    },
+    "AnswerKeyFileRecord": {
+      "title": "AnswerKeyFileRecord",
+      "description": "Admin-only metadata for uploaded answer-key PDFs.",
+      "type": "object",
+      "properties": {
+        "filename": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "sha256": {
+          "type": "string",
+          "minLength": 64,
+          "maxLength": 64
+        },
+        "fileSize": {
+          "type": "integer"
+        },
+        "subjectSlug": {
+          "type": "string",
+          "enum": ["informatika", "mentiq"]
+        },
+        "years": {
+          "type": "array"
+        },
+        "entryCount": {
+          "type": "integer"
+        },
+        "processingStatus": {
+          "type": "string",
+          "enum": ["uploaded", "processing", "completed", "needs_review", "failed"]
+        },
+        "statusMessage": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["filename", "sha256", "fileSize", "subjectSlug", "years", "entryCount", "processingStatus", "createdAt", "updatedAt"]
+    },
+    "AnswerKeyEntryRecord": {
+      "title": "AnswerKeyEntryRecord",
+      "description": "Admin-only extracted answer key entry linked to an answerKeyFile.",
+      "type": "object",
+      "properties": {
+        "answerKeyFileId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "subjectSlug": {
+          "type": "string",
+          "enum": ["informatika", "mentiq"]
+        },
+        "examYear": {
+          "type": "integer"
+        },
+        "questionNumber": {
+          "type": "integer"
+        },
+        "answerToken": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "suggestedOption": {
+          "type": "string",
+          "maxLength": 8
+        },
+        "confidence": {
+          "type": "number"
+        },
+        "sourcePage": {
+          "type": "integer"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["applied", "already_set", "needs_review", "unmatched", "ambiguous", "conflict", "dismissed"]
+        },
+        "matchedQuestionId": {
+          "type": "integer"
+        },
+        "reviewNote": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["answerKeyFileId", "subjectSlug", "answerToken", "confidence", "status", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserPublicProfile" },
+      "description": "Publicly minimal learner/admin profile keyed by Firebase Auth UID."
+    },
+    "/users/{userId}/private/info": {
+      "schema": { "$ref": "#/entities/UserPrivateInfo" },
+      "description": "Strictly owner/admin readable private PII (email)."
+    },
+    "/users/{userId}/attempts/{attemptId}": {
+      "schema": { "$ref": "#/entities/StudyAttemptRecord" },
+      "description": "Immutable practice attempt history belonging to the signed-in user."
+    },
+    "/admins/{userId}": {
+      "schema": { "$ref": "#/entities/AdminMembership" },
+      "description": "Trusted admin lookup table used by Firestore rules."
+    },
+    "/subjects/{subjectId}": {
+      "schema": { "$ref": "#/entities/SubjectCatalog" },
+      "description": "Publicly readable subject catalog."
+    },
+    "/topics/{topicId}": {
+      "schema": { "$ref": "#/entities/TopicCatalog" },
+      "description": "Publicly readable topic catalog."
+    },
+    "/examFiles/{examFileId}": {
+      "schema": { "$ref": "#/entities/ExamFileRecord" },
+      "description": "Publicly readable exam PDF source metadata; admin-only writes."
+    },
+    "/questions/{questionId}": {
+      "schema": { "$ref": "#/entities/QuestionRecord" },
+      "description": "Publicly readable entrance exam questions (no answer keys); admin-only writes."
+    },
+    "/questionAnswers/{questionId}": {
+      "schema": { "$ref": "#/entities/QuestionAnswerSecret" },
+      "description": "Strictly admin-only verified answer keys and citations."
+    },
+    "/answerKeyFiles/{fileId}": {
+      "schema": { "$ref": "#/entities/AnswerKeyFileRecord" },
+      "description": "Strictly admin-only answer-key PDF records."
+    },
+    "/answerKeyFiles/{fileId}/entries/{entryId}": {
+      "schema": { "$ref": "#/entities/AnswerKeyEntryRecord" },
+      "description": "Strictly admin-only answer-key review entries tied to parent answerKeyFiles doc."
+    }
+  }
+}

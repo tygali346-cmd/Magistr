@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { AlertTriangle, Check, FileKey2, FileText, LoaderCircle, ShieldCheck, UploadCloud, X } from "lucide-react";
+import { getAuthHeaders } from "@/lib/authToken";
 import { trpc } from "@/lib/trpc";
 import { errorMessage, formatBytes, formatDate } from "@/lib/study";
 
@@ -61,10 +62,12 @@ export default function AnswerKeyImportPanel() {
       const years = yearsText.split(/[\s,;]+/).filter(Boolean).map(Number);
       const response = await fetch("/api/import/answer-key", {
         method: "POST",
+        credentials: "include",
         headers: {
           "Content-Type": "application/pdf",
           "x-original-filename": encodeURIComponent(file.name),
           "x-answer-subject": subjectSlug,
+          ...getAuthHeaders(),
           ...(years.length ? { "x-exam-years": years.join(",") } : {}),
         },
         body: file,
@@ -160,6 +163,31 @@ export default function AnswerKeyImportPanel() {
     }
   }
 
+  async function openProtectedPdf(answerKeyFileId: number, page?: number | null) {
+    setError("");
+    try {
+      const response = await fetch(`/api/admin/answer-keys/${answerKeyFileId}/pdf`, {
+        credentials: "include",
+        headers: getAuthHeaders(),
+      });
+      if (!response.ok) {
+        throw new Error("Cavab açarı PDF-i açıla bilmədi.");
+      }
+      const blob = await response.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = page ? `${blobUrl}#page=${page}` : blobUrl;
+      anchor.target = "_blank";
+      anchor.rel = "noreferrer";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
+    } catch (cause) {
+      setError(errorMessage(cause, "Cavab açarı PDF-i açıla bilmədi."));
+    }
+  }
+
   return (
     <section className="card card-pad answer-key-panel" aria-labelledby="answer-key-title">
       <div className="section-title-row">
@@ -190,7 +218,7 @@ export default function AnswerKeyImportPanel() {
           <div className="answer-key-file-copy"><strong>{item.filename}</strong><span>{item.subjectName} · {item.years.length ? item.years.join(", ") : "İl PDF-dən müəyyən edilir"} · {item.entryCount} sətir · {formatBytes(item.fileSize)}</span><span className="caption">{item.statusMessage || statusLabel(item.processingStatus)} · {formatDate(item.createdAt)}</span></div>
           <span className={`tag${item.processingStatus === "needs_review" ? " warning" : item.processingStatus === "completed" ? " success" : ""}`}>{statusLabel(item.processingStatus)}</span>
           {item.retryable && <button className="btn btn-secondary answer-key-open" type="button" disabled={busy} onClick={() => void retryFile(item.id, item.processingStatus)}>{item.processingStatus === "processing" ? "Emalı bərpa et" : "Yenidən emal et"}</button>}
-          <a className="btn btn-secondary answer-key-open" href={`/api/admin/answer-keys/${item.id}/pdf`} target="_blank" rel="noreferrer"><FileText size={13} /> PDF-i aç</a>
+          <button type="button" className="btn btn-secondary answer-key-open" onClick={() => void openProtectedPdf(item.id)}><FileText size={13} /> PDF-i aç</button>
         </div>)}
         {!filesQuery.isLoading && !filesQuery.isError && filesQuery.data?.length === 0 && <div className="empty-state"><div className="empty-icon"><FileKey2 size={17} /></div><h3>Cavab açarı yüklənməyib</h3><p>Cavab açarı PDF-i yüklənəndə mənbə məlumatı və uyğunlaşdırma nəticələri burada qalacaq.</p></div>}
       </div>
@@ -215,7 +243,7 @@ export default function AnswerKeyImportPanel() {
             <div className="answer-key-entry-head"><strong>{entry.examYear ?? "İl məlum deyil"} · Sual {entry.questionNumber ?? "—"} · çıxarılan cavab “{entry.answerToken || "—"}”</strong><span className={`tag${entry.status === "conflict" || entry.status === "ambiguous" ? " warning" : ""}`}>{statusLabel(entry.status)} · {Math.round(entry.confidence * 100)}%</span></div>
             <p className="caption">{entry.subjectName} · {entry.filename}{entry.examYear === null && entry.fileYears.length === 1 ? ` · yükləmə ili göstəricisi: ${entry.fileYears[0]}` : ""}{entry.sourcePage ? ` · PDF səhifə ${entry.sourcePage}` : " · səhifə müəyyən edilməyib"}</p>
             {entry.reviewNote && <div className="answer-key-note">{entry.reviewNote}</div>}
-            <a className="file-row-link answer-key-source-link" href={`/api/admin/answer-keys/${entry.answerKeyFileId}/pdf${entry.sourcePage ? `#page=${entry.sourcePage}` : ""}`} target="_blank" rel="noreferrer"><FileText size={13} /> Cavab mənbəsinin səhifəsini aç</a>
+            <button type="button" className="file-row-link answer-key-source-link bg-transparent border-0 p-0" onClick={() => void openProtectedPdf(entry.answerKeyFileId, entry.sourcePage)}><FileText size={13} /> Cavab mənbəsinin səhifəsini aç</button>
             {entry.candidateQuestions.length > 0 ? <>
               {entry.candidateQuestions.length > 1 && <div className="filter-field answer-key-target"><label htmlFor={`answer-target-${entry.id}`}>Uyğun sualı seçin</label><select id={`answer-target-${entry.id}`} className="select-field" value={question?.id ?? ""} onChange={event => { const id = Number(event.target.value); setSelectedQuestions(previous => ({ ...previous, [entry.id]: id })); setSelectedOptions(previous => ({ ...previous, [entry.id]: "" })); setReplaceExisting(previous => ({ ...previous, [entry.id]: false })); }}><option value="">Sual seçin</option>{entry.candidateQuestions.map(candidate => <option key={candidate.id} value={candidate.id}>{candidate.examYear} · Sual {candidate.questionNumber} · #{candidate.id}</option>)}</select></div>}
               {question && <div className="answer-key-match"><strong>Uyğun sual #{question.id}</strong><p>{question.originalText}</p><div className="answer-key-options">{question.options.map(option => <label className="answer-key-option" key={option.label}><input type="radio" name={`answer-option-${entry.id}`} checked={optionValue === option.label} disabled={busy} onChange={() => setSelectedOptions(previous => ({ ...previous, [entry.id]: option.label }))} /><span><b>{option.label}</b> · {option.optionText}</span></label>)}</div>

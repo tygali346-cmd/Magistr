@@ -1,7 +1,9 @@
 import { and, asc, count, desc, eq, inArray, like, or, sql } from "drizzle-orm";
 import { SUBJECT_CATALOG, TOPIC_CATALOG, type SubjectSlug } from "@shared/topicCatalog";
 import { examFiles, importJobs, questionOptions, questions, studyAttempts, subjects, topics } from "../drizzle/schema";
-import { getDb } from "./db";
+import { getDb, markDatabaseUnavailable } from "./db";
+import { memoryStore } from "./memoryStore";
+import { hydrateFromFirestore } from "./firestoreSync";
 
 export type QuestionFilters = {
   subjectSlug?: SubjectSlug;
@@ -24,53 +26,71 @@ export function requireDatabase() {
   });
 }
 
-/** Inserts missing fixed catalog rows but never overwrites existing names or edits. */
+/** Inserts missing fixed catalog rows and hydrates cache from Firestore when populated. */
 export async function ensureTopicCatalog() {
-  const db = await requireDatabase();
-  for (const subject of SUBJECT_CATALOG) {
-    await db.insert(subjects).values(subject).onDuplicateKeyUpdate({
-      set: { slug: sql`${subjects.slug}` },
-    });
-  }
-
-  const subjectRows = await db.select().from(subjects);
-  const subjectIds = new Map(subjectRows.map(subject => [subject.slug, subject.id]));
-  const topicRows = await db.select().from(topics);
-  const topicSlugs = new Set(topicRows.map(topic => topic.slug));
-
-  for (const topic of TOPIC_CATALOG) {
-    if (topicSlugs.has(topic.slug)) continue;
-    const subjectId = subjectIds.get(topic.subjectSlug);
-    if (!subjectId) throw new Error(`Fənn tapılmadı: ${topic.subjectSlug}`);
-    const parent = topic.parentNumberLabel
-      ? topicRows.find(row => row.subjectId === subjectId && row.numberLabel === topic.parentNumberLabel)
-      : undefined;
-    await db.insert(topics).values({
-      subjectId,
-      slug: topic.slug,
-      numberLabel: topic.numberLabel,
-      name: topic.name,
-      parentId: parent?.id ?? null,
-      sortOrder: topic.sortOrder,
-      isActive: true,
-    }).onDuplicateKeyUpdate({
-      set: { slug: sql`${topics.slug}` },
-    });
-  }
-  const seededTopics = await db.select().from(topics);
-  for (const topic of TOPIC_CATALOG) {
-    if (!topic.parentNumberLabel) continue;
-    const subjectId = subjectIds.get(topic.subjectSlug);
-    const parent = seededTopics.find(row => row.subjectId === subjectId && row.numberLabel === topic.parentNumberLabel);
-    const child = seededTopics.find(row => row.slug === topic.slug);
-    if (parent && child && child.parentId !== parent.id) {
-      await db.update(topics).set({ parentId: parent.id }).where(eq(topics.id, child.id));
+  const db = await getDb();
+  if (!db) {
+    memoryStore.ensureInitialized();
+    const hydrated = await hydrateFromFirestore().catch(() => false);
+    if (hydrated) {
+      console.log("[Firestore] Question bank cache hydrated from Firestore");
+    } else {
+      console.warn("[Firestore] Firestore catalog is currently empty — using local seed/cache until an admin signs in to sync");
     }
+    return;
+  }
+
+  try {
+    for (const subject of SUBJECT_CATALOG) {
+      await db.insert(subjects).values(subject).onDuplicateKeyUpdate({
+        set: { slug: sql`${subjects.slug}` },
+      });
+    }
+
+    const subjectRows = await db.select().from(subjects);
+    const subjectIds = new Map(subjectRows.map(subject => [subject.slug, subject.id]));
+    const topicRows = await db.select().from(topics);
+    const topicSlugs = new Set(topicRows.map(topic => topic.slug));
+
+    for (const topic of TOPIC_CATALOG) {
+      if (topicSlugs.has(topic.slug)) continue;
+      const subjectId = subjectIds.get(topic.subjectSlug);
+      if (!subjectId) throw new Error(`Fənn tapılmadı: ${topic.subjectSlug}`);
+      const parent = topic.parentNumberLabel
+        ? topicRows.find(row => row.subjectId === subjectId && row.numberLabel === topic.parentNumberLabel)
+        : undefined;
+      await db.insert(topics).values({
+        subjectId,
+        slug: topic.slug,
+        numberLabel: topic.numberLabel,
+        name: topic.name,
+        parentId: parent?.id ?? null,
+        sortOrder: topic.sortOrder,
+        isActive: true,
+      }).onDuplicateKeyUpdate({
+        set: { slug: sql`${topics.slug}` },
+      });
+    }
+    const seededTopics = await db.select().from(topics);
+    for (const topic of TOPIC_CATALOG) {
+      if (!topic.parentNumberLabel) continue;
+      const subjectId = subjectIds.get(topic.subjectSlug);
+      const parent = seededTopics.find(row => row.subjectId === subjectId && row.numberLabel === topic.parentNumberLabel);
+      const child = seededTopics.find(row => row.slug === topic.slug);
+      if (parent && child && child.parentId !== parent.id) {
+        await db.update(topics).set({ parentId: parent.id }).where(eq(topics.id, child.id));
+      }
+    }
+  } catch (error) {
+    console.warn("[Database] Connection failed during startup — switching to seeded in-memory store:", error instanceof Error ? error.message : error);
+    markDatabaseUnavailable();
+    memoryStore.ensureInitialized();
   }
 }
 
 export async function listSubjects() {
-  const db = await requireDatabase();
+  const db = await getDb();
+  if (!db) return memoryStore.listSubjects();
   const rows = await db.select({
     id: subjects.id,
     slug: subjects.slug,
@@ -85,7 +105,8 @@ export async function listSubjects() {
 }
 
 export async function listTopics(subjectSlug: SubjectSlug) {
-  const db = await requireDatabase();
+  const db = await getDb();
+  if (!db) return memoryStore.listTopics(subjectSlug);
   const subject = await db.select({ id: subjects.id }).from(subjects).where(eq(subjects.slug, subjectSlug)).limit(1);
   if (!subject[0]) return [];
   return db.select({
@@ -104,13 +125,15 @@ export async function listTopics(subjectSlug: SubjectSlug) {
 }
 
 export async function listExamFiles() {
-  const db = await requireDatabase();
+  const db = await getDb();
+  if (!db) return memoryStore.listExamFiles();
   const rows = await db.select().from(examFiles).orderBy(desc(examFiles.createdAt));
   return rows;
 }
 
 export async function getDashboardData() {
-  const db = await requireDatabase();
+  const db = await getDb();
+  if (!db) return memoryStore.getDashboardData();
   const [questionTotal] = await db.select({ value: count() }).from(questions);
   const [examTotal] = await db.select({ value: count() }).from(examFiles);
   const [reviewTotal] = await db.select({ value: count() }).from(questions).where(eq(questions.reviewStatus, "needs_review"));
@@ -141,7 +164,8 @@ export async function getDashboardData() {
 }
 
 export async function listQuestions(filters: QuestionFilters = {}) {
-  const db = await requireDatabase();
+  const db = await getDb();
+  if (!db) return memoryStore.listQuestions(filters);
   const predicates = [];
   if (filters.subjectSlug) predicates.push(eq(subjects.slug, filters.subjectSlug));
   if (filters.topicSlug) predicates.push(eq(topics.slug, filters.topicSlug));
@@ -230,7 +254,8 @@ export async function saveQuestionReview(input: {
   reviewStatus: "checked" | "needs_review";
   reviewNote: string | null;
 }) {
-  const db = await requireDatabase();
+  const db = await getDb();
+  if (!db) return memoryStore.saveQuestionReview(input);
   const [current] = await db.select().from(questions).where(eq(questions.id, input.questionId)).limit(1);
   if (!current) return false;
   await db.update(questions).set({
@@ -249,7 +274,8 @@ export async function saveQuestionReview(input: {
 }
 
 export async function getLearnerAttempts(learnerKey: string, limit = 50) {
-  const db = await requireDatabase();
+  const db = await getDb();
+  if (!db) return memoryStore.getLearnerAttempts(learnerKey, limit);
   return db.select().from(studyAttempts)
     .where(eq(studyAttempts.learnerKey, learnerKey))
     .orderBy(desc(studyAttempts.createdAt))
@@ -257,25 +283,32 @@ export async function getLearnerAttempts(learnerKey: string, limit = 50) {
 }
 
 export async function getSubjectBySlug(subjectSlug: SubjectSlug) {
-  const db = await requireDatabase();
+  const db = await getDb();
+  if (!db) return memoryStore.getSubjectBySlug(subjectSlug);
   const rows = await db.select().from(subjects).where(eq(subjects.slug, subjectSlug)).limit(1);
   return rows[0] ?? null;
 }
 
 export async function getTopicBySlug(topicSlug: string) {
-  const db = await requireDatabase();
+  const db = await getDb();
+  if (!db) return memoryStore.getTopicBySlug(topicSlug);
   const rows = await db.select().from(topics).where(eq(topics.slug, topicSlug)).limit(1);
   return rows[0] ?? null;
 }
 
 export async function getExamFileById(examFileId: number) {
-  const db = await requireDatabase();
+  const db = await getDb();
+  if (!db) return memoryStore.getExamFileById(examFileId);
   const rows = await db.select().from(examFiles).where(eq(examFiles.id, examFileId)).limit(1);
   return rows[0] ?? null;
 }
 
 export async function updateExamFileState(examFileId: number, state: "uploaded" | "processing" | "completed" | "needs_review" | "failed", countValue?: number) {
-  const db = await requireDatabase();
+  const db = await getDb();
+  if (!db) {
+    memoryStore.updateExamFileState(examFileId, state, countValue);
+    return;
+  }
   await db.update(examFiles).set({
     processingStatus: state,
     ...(countValue !== undefined ? { questionCount: countValue } : {}),

@@ -6,7 +6,8 @@ import { z } from "zod";
 import { answerKeyEntries, answerKeyFiles, questionOptions, questions, subjects } from "../drizzle/schema";
 import { classifyAnswerKeyEntry, type AnswerKeyCandidate } from "./answerKeyLogic";
 import { extractPdfWithGemini } from "./gemini";
-import { requireDatabase } from "./questionBankDb";
+import { getDb } from "./db";
+import { memoryStore } from "./memoryStore";
 import { inferYears } from "./questionBank";
 
 const MAX_ANSWER_KEY_BYTES = 40 * 1024 * 1024;
@@ -94,11 +95,52 @@ export async function storeUploadedAnswerKeyPdf(
   if (!filename.toLowerCase().endsWith(".pdf")) throw new Error("Yalnız PDF faylı yükləmək olar.");
   if (subjectSlug !== "informatika" && subjectSlug !== "mentiq") throw new Error("Cavab açarı PDF-i üçün fənn seçilməlidir.");
 
-  const db = await requireDatabase();
-  const [subject] = await db.select({ id: subjects.id }).from(subjects).where(eq(subjects.slug, subjectSlug)).limit(1);
-  if (!subject) throw new Error("Seçilmiş fənn tapılmadı.");
   const years = parseYearHints(yearHeader, filename);
   const sha256 = createHash("sha256").update(bytes).digest("hex");
+  const db = await getDb();
+  if (!db) {
+    memoryStore.ensureInitialized();
+    const subject = memoryStore.subjects.find(s => s.slug === subjectSlug);
+    if (!subject) throw new Error("Seçilmiş fənn tapılmadı.");
+    const existing = memoryStore.answerKeyFiles.find(f => f.sha256 === sha256);
+    if (existing) {
+      if (existing.subjectId !== subject.id) throw new TRPCError({ code: "CONFLICT", message: "Eyni cavab açarı PDF-i daha əvvəl başqa fənn üçün yüklənib." });
+      const sameYears = [...existing.years].sort((a, b) => a - b).join(",") === [...years].sort((a, b) => a - b).join(",");
+      if (!sameYears) {
+        if (existing.processingStatus === "processing") throw new TRPCError({ code: "CONFLICT", message: "Bu cavab açarı PDF-i hazırda emal olunur; il göstəricisini sonra dəyişin." });
+        const appliedCount = memoryStore.answerKeyEntries.filter(e => e.answerKeyFileId === existing.id && (e.status === "applied" || e.status === "already_set")).length;
+        if (appliedCount > 0) throw new TRPCError({ code: "CONFLICT", message: "Bu PDF-dən cavab artıq tətbiq edilib; saxlanmış mənbənin il göstəricisini dəyişmək olmaz." });
+        memoryStore.answerKeyEntries = memoryStore.answerKeyEntries.filter(e => e.answerKeyFileId !== existing.id);
+        existing.years = years;
+        existing.entryCount = 0;
+        existing.processingStatus = "uploaded";
+        existing.statusMessage = "İl göstəricisi yeniləndi; PDF təkrar emal üçün hazırdır.";
+        existing.updatedAt = new Date();
+        return { answerKeyFileId: existing.id, duplicate: true, metadataUpdated: true, processingStatus: "uploaded" as const, entryCount: 0 };
+      }
+      return { answerKeyFileId: existing.id, duplicate: true, metadataUpdated: false, processingStatus: existing.processingStatus, entryCount: existing.entryCount };
+    }
+    const now = new Date();
+    const id = memoryStore.nextIds.answerKeyFile++;
+    memoryStore.answerKeyFiles.push({
+      id,
+      filename,
+      sha256,
+      fileSize: bytes.byteLength,
+      pdfBytes: Buffer.from(bytes),
+      subjectId: subject.id,
+      years,
+      entryCount: 0,
+      processingStatus: "uploaded",
+      statusMessage: "PDF yükləndi; AI emalı hələ başlamayıb.",
+      createdAt: now,
+      updatedAt: now,
+    });
+    memoryStore.saveSnapshot();
+    return { answerKeyFileId: id, duplicate: false, metadataUpdated: false, processingStatus: "uploaded" as const, entryCount: 0 };
+  }
+  const [subject] = await db.select({ id: subjects.id }).from(subjects).where(eq(subjects.slug, subjectSlug)).limit(1);
+  if (!subject) throw new Error("Seçilmiş fənn tapılmadı.");
   return db.transaction(async tx => {
     const [existing] = await tx.select({
       id: answerKeyFiles.id,
@@ -168,7 +210,60 @@ function answerSource(filename: string, page: number | null, fileId: number) {
 }
 
 export async function runAnswerKeyImport(answerKeyFileId: number) {
-  const db = await requireDatabase();
+  const db = await getDb();
+  if (!db) {
+    memoryStore.ensureInitialized();
+    const file = memoryStore.answerKeyFiles.find(f => f.id === answerKeyFileId);
+    if (!file) throw new TRPCError({ code: "NOT_FOUND", message: "Cavab açarı PDF-i tapılmadı." });
+    const staleProcessing = file.processingStatus === "processing" && Date.now() - file.updatedAt.getTime() > STALE_PROCESSING_MS;
+    if (!staleProcessing && !["uploaded", "failed", "needs_review", "completed"].includes(file.processingStatus)) {
+      throw new TRPCError({ code: "CONFLICT", message: "Bu cavab açarı PDF-i hazırda emal olunur; 30 dəqiqə keçdikdən sonra yenidən cəhd edin." });
+    }
+    file.processingStatus = "processing";
+    file.statusMessage = "PDF-dən çap olunmuş cavablar çıxarılır.";
+    file.updatedAt = new Date();
+    try {
+      const subject = memoryStore.subjects.find(s => s.id === file.subjectId);
+      if (!subject) throw new Error("Cavab açarı PDF-ində seçilmiş fənn tapılmadı.");
+      const output = await extractPdfWithGemini(Buffer.from(file.pdfBytes), file.filename, extractionPrompt(file.filename, subject.name, file.years ?? []), ANSWER_KEY_JSON_SCHEMA);
+      const parsed = answerKeyExtractionSchema.safeParse(parseModelJson(output));
+      if (!parsed.success) throw new Error("AI cavabı tələb olunan cavab açarı quruluşuna uyğun deyil.");
+      const extracted = parsed.data.entries;
+      if (!extracted.length) throw new Error("PDF-dən cavab sətri çıxarılmadı; fayl yenidən emal üçün saxlanıldı.");
+      const rows = extracted.map(entry => ({ ...entry, matchYear: entry.examYear ?? (file.years?.length === 1 ? file.years[0]! : null), yearWasPrinted: entry.examYear !== null, yearOutsideHint: entry.examYear !== null && !!file.years?.length && !file.years.includes(entry.examYear) }));
+      const duplicateCounts = new Map<string, number>();
+      for (const row of rows) { if (row.matchYear !== null && row.questionNumber !== null) { const key = `${row.matchYear}:${row.questionNumber}`; duplicateCounts.set(key, (duplicateCounts.get(key) ?? 0) + 1); } }
+      const extractionIncomplete = !parsed.data.completeness.likelyComplete || !!parsed.data.completeness.note.trim();
+      memoryStore.answerKeyEntries = memoryStore.answerKeyEntries.filter(e => e.answerKeyFileId !== answerKeyFileId);
+      const counts = { matched: 0, alreadySet: 0, needsReview: 0, unmatched: 0, ambiguous: 0, conflicts: 0 };
+      const now = new Date();
+      for (const row of rows) {
+        const key = row.matchYear !== null && row.questionNumber !== null ? `${row.matchYear}:${row.questionNumber}` : "";
+        const matches = key ? memoryStore.questions.filter(q => q.subjectId === file.subjectId && q.examYear === row.matchYear && q.questionNumber === row.questionNumber) : [];
+        const candidates: AnswerKeyCandidate[] = matches.map(q => ({ id: q.id, correctOption: q.correctOption, correctAnswerSource: q.correctAnswerSource, options: memoryStore.questionOptions.filter(o => o.questionId === q.id).map(o => ({ label: o.label })) }));
+        const classification = classifyAnswerKeyEntry({ examYear: row.matchYear, questionNumber: row.questionNumber, answerToken: row.answerToken, confidence: row.confidence, candidates, yearWasPrinted: row.yearWasPrinted, duplicateInSource: !!key && (duplicateCounts.get(key) ?? 0) > 1, yearOutsideHint: row.yearOutsideHint, extractionIncomplete, rowWarning: row.reviewNote });
+        if (classification.status === "already_set") counts.alreadySet += 1;
+        else if (classification.matchedQuestionId !== null) counts.matched += 1;
+        if (classification.status === "needs_review") counts.needsReview += 1;
+        else if (classification.status === "unmatched") counts.unmatched += 1;
+        else if (classification.status === "ambiguous") counts.ambiguous += 1;
+        else if (classification.status === "conflict") counts.conflicts += 1;
+        memoryStore.answerKeyEntries.push({ id: memoryStore.nextIds.answerKeyEntry++, answerKeyFileId: file.id, subjectId: file.subjectId, examYear: row.examYear, questionNumber: row.questionNumber, answerToken: row.answerToken, suggestedOption: classification.suggestedOption, confidence: row.confidence, sourcePage: row.sourcePage, status: classification.status, matchedQuestionId: classification.matchedQuestionId, candidateQuestionIds: classification.candidateQuestionIds, reviewNote: [classification.reviewNote, row.reviewNote.trim() || "", extractionIncomplete && parsed.data.completeness.note.trim() ? `PDF tamlığı: ${parsed.data.completeness.note.trim()}` : ""].filter(Boolean).join(" · ").slice(0, 2000) || null, createdAt: now, updatedAt: now });
+      }
+      const openCount = counts.needsReview + counts.unmatched + counts.ambiguous + counts.conflicts;
+      const processingStatus = openCount ? "needs_review" as const : "completed" as const;
+      const statusMessage = `${counts.matched} sual uyğunluğu təklif edildi; ${counts.alreadySet} eyni cavab və mənbə əvvəldən təsdiqlənmişdi; ${openCount} sətir admin yoxlanışındadır.`;
+      file.entryCount = extracted.length; file.processingStatus = processingStatus; file.statusMessage = statusMessage; file.updatedAt = new Date();
+      memoryStore.saveSnapshot();
+      return { answerKeyFileId: file.id, entryCount: extracted.length, ...counts, openCount, processingStatus, statusMessage };
+    } catch (error) {
+      const message = error instanceof Error ? error.message.slice(0, 1000) : "Cavab açarı PDF-i emal edilmədi.";
+      file.processingStatus = "failed"; file.statusMessage = message; file.updatedAt = new Date();
+      memoryStore.saveSnapshot();
+      if (error instanceof TRPCError) throw error;
+      throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message });
+    }
+  }
   const file = await db.transaction(async tx => {
     const [candidate] = await tx.select().from(answerKeyFiles).where(eq(answerKeyFiles.id, answerKeyFileId)).for("update");
     if (!candidate) throw new TRPCError({ code: "NOT_FOUND", message: "Cavab açarı PDF-i tapılmadı." });
@@ -300,7 +395,30 @@ export async function runAnswerKeyImport(answerKeyFileId: number) {
 }
 
 export async function listAnswerKeyFiles() {
-  const db = await requireDatabase();
+  const db = await getDb();
+  if (!db) {
+    memoryStore.ensureInitialized();
+    return [...memoryStore.answerKeyFiles]
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+      .map(file => {
+        const subject = memoryStore.subjects.find(s => s.id === file.subjectId);
+        return {
+          id: file.id,
+          filename: file.filename,
+          fileSize: file.fileSize,
+          years: file.years,
+          entryCount: file.entryCount,
+          processingStatus: file.processingStatus,
+          statusMessage: file.statusMessage,
+          createdAt: file.createdAt,
+          updatedAt: file.updatedAt,
+          subjectSlug: subject?.slug ?? "informatika",
+          subjectName: subject?.name ?? "İnformatika",
+          retryable: ["uploaded", "failed", "needs_review", "completed"].includes(file.processingStatus)
+            || (file.processingStatus === "processing" && Date.now() - file.updatedAt.getTime() > STALE_PROCESSING_MS),
+        };
+      });
+  }
   const files = await db.select({
     id: answerKeyFiles.id,
     filename: answerKeyFiles.filename,
@@ -324,9 +442,40 @@ export async function listAnswerKeyFiles() {
 }
 
 export async function listAnswerKeyReviewQueue(input: { limit?: number; offset?: number } = {}) {
-  const db = await requireDatabase();
+  const db = await getDb();
   const limit = input.limit ?? 100;
   const offset = input.offset ?? 0;
+  if (!db) {
+    memoryStore.ensureInitialized();
+    const entries = memoryStore.answerKeyEntries
+      .filter(e => OPEN_STATUSES.includes(e.status as typeof OPEN_STATUSES[number]))
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+      .slice(offset, offset + limit);
+    return entries.map(entry => {
+      const file = memoryStore.answerKeyFiles.find(f => f.id === entry.answerKeyFileId);
+      const subject = memoryStore.subjects.find(s => s.id === entry.subjectId);
+      const candidateQuestions = (entry.candidateQuestionIds ?? [])
+        .map(id => memoryStore.questions.find(q => q.id === id))
+        .filter((q): q is NonNullable<typeof q> => q !== undefined)
+        .map(q => ({
+          id: q.id,
+          subjectId: q.subjectId,
+          examYear: q.examYear,
+          questionNumber: q.questionNumber,
+          originalText: q.originalText,
+          correctOption: q.correctOption,
+          options: memoryStore.questionOptions.filter(o => o.questionId === q.id).sort((a, b) => a.sortOrder - b.sortOrder),
+        }));
+      return {
+        ...entry,
+        filename: file?.filename ?? "",
+        fileYears: file?.years ?? [],
+        subjectSlug: subject?.slug ?? "informatika",
+        subjectName: subject?.name ?? "İnformatika",
+        candidateQuestions,
+      };
+    });
+  }
   const entries = await db.select({
     id: answerKeyEntries.id,
     answerKeyFileId: answerKeyEntries.answerKeyFileId,
@@ -384,7 +533,42 @@ export async function approveAnswerKeyEntry(input: {
   expectedCurrentOption: string | null;
   replaceExisting: boolean;
 }) {
-  const db = await requireDatabase();
+  const db = await getDb();
+  if (!db) {
+    memoryStore.ensureInitialized();
+    const entry = memoryStore.answerKeyEntries.find(e => e.id === input.entryId);
+    if (!entry) throw new TRPCError({ code: "NOT_FOUND", message: "Cavab açarı sətri tapılmadı." });
+    if (!OPEN_STATUSES.includes(entry.status as typeof OPEN_STATUSES[number])) throw new TRPCError({ code: "CONFLICT", message: "Bu cavab açarı sətri artıq yoxlanılıb." });
+    if (!entry.candidateQuestionIds.includes(input.questionId)) throw new TRPCError({ code: "BAD_REQUEST", message: "Seçilən sual AI uyğunlaşdırma siyahısında deyil." });
+    if (entry.questionNumber === null) throw new TRPCError({ code: "BAD_REQUEST", message: "Sual nömrəsi müəyyən edilməyib; bu sətir uyğun suala bağlana bilməz." });
+    const file = memoryStore.answerKeyFiles.find(f => f.id === entry.answerKeyFileId);
+    const question = memoryStore.questions.find(q => q.id === input.questionId);
+    if (!file || !question) throw new TRPCError({ code: "NOT_FOUND", message: "Cavab mənbəyi və ya uyğun sual tapılmadı." });
+    const expectedYear = entry.examYear ?? (file.years.length === 1 ? file.years[0] : null);
+    if (expectedYear === null) throw new TRPCError({ code: "BAD_REQUEST", message: "PDF-də il oxunmayıb və tək il göstəricisi yoxdur; uyğunluğu əl ilə təsdiqləmək mümkün deyil." });
+    if (question.subjectId !== file.subjectId || question.examYear !== expectedYear || question.questionNumber !== entry.questionNumber) {
+      throw new TRPCError({ code: "CONFLICT", message: "Sual artıq seçilmiş fənn, il və nömrəyə uyğun gəlmir." });
+    }
+    if (question.correctOption !== input.expectedCurrentOption) throw new TRPCError({ code: "CONFLICT", message: "Mövcud cavab açarı dəyişib. Siyahını yeniləyib yenidən yoxlayın." });
+    const option = memoryStore.questionOptions.find(o => o.questionId === question.id && o.label === input.correctOption);
+    if (!option) throw new TRPCError({ code: "BAD_REQUEST", message: "Seçilən düzgün cavab sualın mövcud variantlarından biri deyil." });
+    if (question.correctOption && question.correctOption !== option.label && !input.replaceExisting) {
+      throw new TRPCError({ code: "CONFLICT", message: "Mövcud cavab fərqlidir. Əvəz etmək üçün açıq təsdiq tələb olunur." });
+    }
+    const sameAnswer = question.correctOption === option.label;
+    if (!sameAnswer || !question.correctAnswerSource) {
+      if (!sameAnswer) question.correctOption = option.label;
+      question.correctAnswerSource = question.correctAnswerSource || answerSource(file.filename, entry.sourcePage, entry.answerKeyFileId);
+    }
+    entry.status = sameAnswer ? "already_set" : "applied";
+    entry.matchedQuestionId = question.id;
+    entry.reviewNote = sameAnswer ? "Eyni cavab əvvəldən saxlanmışdır; mövcud mənbə dəyişdirilmədi." : null;
+    const unresolved = memoryStore.answerKeyEntries.filter(e => e.answerKeyFileId === entry.answerKeyFileId && OPEN_STATUSES.includes(e.status as typeof OPEN_STATUSES[number])).length;
+    file.processingStatus = unresolved ? "needs_review" : "completed";
+    file.statusMessage = unresolved ? `${unresolved} cavab açarı sətri admin yoxlanışındadır.` : "Bütün cavab açarı sətirləri yoxlanıldı.";
+    memoryStore.saveSnapshot();
+    return { status: sameAnswer ? "already_set" as const : "applied" as const, questionId: question.id };
+  }
   const result = await db.transaction(async tx => {
     const [entry] = await tx.select().from(answerKeyEntries).where(eq(answerKeyEntries.id, input.entryId)).for("update");
     if (!entry) throw new TRPCError({ code: "NOT_FOUND", message: "Cavab açarı sətri tapılmadı." });
@@ -427,7 +611,22 @@ export async function approveAnswerKeyEntry(input: {
 }
 
 export async function dismissAnswerKeyEntry(entryId: number) {
-  const db = await requireDatabase();
+  const db = await getDb();
+  if (!db) {
+    memoryStore.ensureInitialized();
+    const entry = memoryStore.answerKeyEntries.find(e => e.id === entryId);
+    if (!entry) throw new TRPCError({ code: "NOT_FOUND", message: "Cavab açarı sətri tapılmadı." });
+    if (!OPEN_STATUSES.includes(entry.status as typeof OPEN_STATUSES[number])) throw new TRPCError({ code: "CONFLICT", message: "Bu sətir artıq yoxlanış növbəsində deyil." });
+    entry.status = "dismissed";
+    const file = memoryStore.answerKeyFiles.find(f => f.id === entry.answerKeyFileId);
+    const unresolved = memoryStore.answerKeyEntries.filter(e => e.answerKeyFileId === entry.answerKeyFileId && OPEN_STATUSES.includes(e.status as typeof OPEN_STATUSES[number])).length;
+    if (file) {
+      file.processingStatus = unresolved ? "needs_review" : "completed";
+      file.statusMessage = unresolved ? `${unresolved} cavab açarı sətri admin yoxlanışındadır.` : "Bütün cavab açarı sətirləri yoxlanıldı.";
+    }
+    memoryStore.saveSnapshot();
+    return { success: true };
+  }
   return db.transaction(async tx => {
     const [entry] = await tx.select({ id: answerKeyEntries.id, answerKeyFileId: answerKeyEntries.answerKeyFileId, status: answerKeyEntries.status }).from(answerKeyEntries).where(eq(answerKeyEntries.id, entryId)).for("update");
     if (!entry) throw new TRPCError({ code: "NOT_FOUND", message: "Cavab açarı sətri tapılmadı." });
@@ -444,7 +643,12 @@ export async function dismissAnswerKeyEntry(entryId: number) {
 }
 
 export async function getAnswerKeyPdfForAdmin(answerKeyFileId: number) {
-  const db = await requireDatabase();
+  const db = await getDb();
+  if (!db) {
+    memoryStore.ensureInitialized();
+    const file = memoryStore.answerKeyFiles.find(f => f.id === answerKeyFileId);
+    return file ? { filename: file.filename, pdfBytes: file.pdfBytes } : null;
+  }
   const [file] = await db.select({ filename: answerKeyFiles.filename, pdfBytes: answerKeyFiles.pdfBytes }).from(answerKeyFiles).where(eq(answerKeyFiles.id, answerKeyFileId)).limit(1);
   return file ?? null;
 }

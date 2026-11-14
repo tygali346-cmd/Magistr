@@ -1,8 +1,10 @@
 import { useRef, useState } from "react";
-import { Archive, ArrowDownToLine, Check, CircleHelp, FileQuestion, FileText, FileUp, LoaderCircle, Plus, RotateCcw, ShieldAlert, Sparkles, UploadCloud, X } from "lucide-react";
+import { Archive, ArrowDownToLine, Check, CircleHelp, FileQuestion, FileText, FileUp, LoaderCircle, LogOut, Plus, RotateCcw, ShieldAlert, Sparkles, UploadCloud, X } from "lucide-react";
 import { Link } from "wouter";
+import { useAuth } from "@/_core/hooks/useAuth";
 import AppShell from "@/components/AppShell";
 import AnswerKeyImportPanel from "@/components/AnswerKeyImportPanel";
+import { getAuthHeaders } from "@/lib/authToken";
 import { trpc } from "@/lib/trpc";
 import { errorMessage, formatBytes, formatDate, type TopicRecord } from "@/lib/study";
 
@@ -10,6 +12,7 @@ const MAX_PDF_BYTES = 50 * 1024 * 1024;
 type LocalFile = { file: File; status: "ready" | "working" | "done" | "error"; note?: string; expectedQuestionCount?: string };
 
 export default function UploadPage() {
+  const { logout } = useAuth();
   const inputRef = useRef<HTMLInputElement>(null);
   const [files, setFiles] = useState<LocalFile[]>([]);
   const [yearsText, setYearsText] = useState("");
@@ -72,9 +75,11 @@ export default function UploadPage() {
       try {
         const response = await fetch("/api/import/pdf", {
           method: "POST",
+          credentials: "include",
           headers: {
             "Content-Type": "application/pdf",
             "x-original-filename": encodeURIComponent(current.file.name),
+            ...getAuthHeaders(),
             ...(years.length ? { "x-exam-years": years.join(",") } : {}),
             ...(current.expectedQuestionCount?.trim() ? { "x-expected-question-count": current.expectedQuestionCount.trim() } : {}),
           },
@@ -169,7 +174,7 @@ export default function UploadPage() {
   }
 
   return (
-    <AppShell title="PDF arxivi" eyebrow="MƏNBƏLƏR · İDXAL VƏ EHTİYAT NÜSXƏSİ" actions={<button className="btn btn-secondary" onClick={downloadBackup} disabled={exporting}><ArrowDownToLine size={14} /> {exporting ? "Hazırlanır…" : "JSON ehtiyat nüsxəsi"}</button>}>
+    <AppShell title="PDF arxivi" eyebrow="MƏNBƏLƏR · İDXAL VƏ EHTİYAT NÜSXƏSİ" actions={<><button className="btn btn-secondary" onClick={downloadBackup} disabled={exporting}><ArrowDownToLine size={14} /> {exporting ? "Hazırlanır…" : "JSON ehtiyat nüsxəsi"}</button><button className="btn btn-quiet" onClick={() => void logout()}><LogOut size={14} /> Çıxış</button></>}>
       <div className="notice-box" style={{ marginBottom: 15 }}><ShieldAlert size={14} style={{ display: "inline", verticalAlign: "-3px", marginRight: 5 }} /><strong>Gemini emalını yalnız admin başladır.</strong> Təhlil üçün PDF Google-a göndərilir; emal tamamlandıqdan sonra müvəqqəti Gemini faylı silinir. Sorğular konfiqurasiya edilmiş Google Gemini API açarının kvotasından istifadə edir. Sistem sualları və mövzuları çıxarır, düzgün cavab uydurmur; qeyri-müəyyən qeydlər yoxlanış siyahısında qalır.</div>
       <div className="upload-box">
         <label className={`drop-zone${dragging ? " dragging" : ""}`} onDragOver={event => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={event => { event.preventDefault(); setDragging(false); addFiles(event.dataTransfer.files); }}>

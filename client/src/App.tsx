@@ -3,6 +3,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/NotFound";
 import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
+import { FirebaseProvider } from "./contexts/FirebaseContext";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import AdminGate from "./components/AdminGate";
 import DashboardPage from "./pages/DashboardPage";
@@ -42,8 +43,10 @@ export default function App() {
     <ErrorBoundary>
       <ThemeProvider defaultTheme="light">
         <TooltipProvider>
-          <Toaster richColors position="top-right" />
-          <Router />
+          <FirebaseProvider>
+            <Toaster richColors position="top-right" />
+            <Router />
+          </FirebaseProvider>
         </TooltipProvider>
       </ThemeProvider>
     </ErrorBoundary>
