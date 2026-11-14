@@ -125,6 +125,17 @@ function inferYears(filename: string) {
   return [...new Set([...filename.matchAll(/\b(?:19|20)\d{2}\b/g)].map(match => Number(match[0])))].filter(year => year >= 1900 && year <= 2100).slice(0, 10);
 }
 
+export function completenessWarnings(completeness: ExtractionResult["completeness"]) {
+  const warnings: string[] = [];
+  if (!completeness.likelyComplete) {
+    warnings.push(completeness.note.trim() || "AI sualların tam çıxarıldığını təsdiqləyə bilmədi.");
+  }
+  if (completeness.suspectedMissingQuestionNumbers.length) {
+    warnings.push(`Buraxılmış ola bilən nömrələr: ${completeness.suspectedMissingQuestionNumbers.join(", ")}.`);
+  }
+  return warnings;
+}
+
 async function ensureTopicCatalog() {
   const db = await requireDatabase();
   for (const subject of SUBJECT_CATALOG) {
@@ -325,13 +336,7 @@ async function runImport(examFileId: number) {
     const extraction = await extractQuestionsFromPdf(pdfBytes, file.filename, file.years ?? [], file.expectedQuestionCount);
     const extracted = extraction.questions;
     if (!extracted.length) throw new Error("PDF-dən heç bir sual çıxarılmadı; fayl uğursuz kimi saxlanıldı və yenidən emal edilə bilər.");
-    const extractionWarnings: string[] = [];
-    if (!extraction.completeness.likelyComplete || extraction.completeness.note.trim()) {
-      extractionWarnings.push(extraction.completeness.note.trim() || "AI sualların tam çıxarıldığını təsdiqləyə bilmədi.");
-    }
-    if (extraction.completeness.suspectedMissingQuestionNumbers.length) {
-      extractionWarnings.push(`Buraxılmış ola bilən nömrələr: ${extraction.completeness.suspectedMissingQuestionNumbers.join(", ")}.`);
-    }
+    const extractionWarnings = completenessWarnings(extraction.completeness);
     if (file.expectedQuestionCount !== null && file.expectedQuestionCount !== extracted.length) {
       extractionWarnings.push(`Gözlənilən ${file.expectedQuestionCount} sualdan ${extracted.length} sual çıxarıldı.`);
     }
