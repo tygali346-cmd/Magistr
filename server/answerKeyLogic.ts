@@ -7,7 +7,7 @@ export type AnswerKeyStatus =
   | "conflict"
   | "dismissed";
 
-export const ANSWER_KEY_AUTO_APPLY_THRESHOLD = 0.95;
+export const ANSWER_KEY_SUGGESTION_THRESHOLD = 0.95;
 
 export type AnswerKeyCandidate = {
   id: number;
@@ -17,7 +17,7 @@ export type AnswerKeyCandidate = {
 };
 
 export type AnswerKeyClassification = {
-  status: Exclude<AnswerKeyStatus, "dismissed">;
+  status: Exclude<AnswerKeyStatus, "applied" | "dismissed">;
   matchedQuestionId: number | null;
   candidateQuestionIds: number[];
   suggestedOption: string | null;
@@ -34,6 +34,7 @@ export function classifyAnswerKeyEntry(input: {
   answerToken: string;
   confidence: number;
   candidates: AnswerKeyCandidate[];
+  yearWasPrinted?: boolean;
   duplicateInSource?: boolean;
   yearOutsideHint?: boolean;
   extractionIncomplete?: boolean;
@@ -76,14 +77,20 @@ export function classifyAnswerKeyEntry(input: {
   if (!option) {
     return { ...base, status: "needs_review", reviewNote: "Çıxarılan cavab işarəsi sualın variant etiketləri ilə dəqiq uyğun gəlmir." };
   }
-  if (!Number.isFinite(input.confidence) || input.confidence < ANSWER_KEY_AUTO_APPLY_THRESHOLD) {
+  if (input.yearWasPrinted === false) {
+    return { ...base, status: "needs_review", reviewNote: "İmtahan ili PDF-dən çıxarılmadı; yükləmə göstəricisi ilə tapılan uyğunluq admin tərəfindən yoxlanmalıdır." };
+  }
+  if (!Number.isFinite(input.confidence) || input.confidence < ANSWER_KEY_SUGGESTION_THRESHOLD) {
     return { ...base, status: "needs_review", reviewNote: "AI əminliyi 95%-dən aşağıdır; admin yoxlaması tələb olunur." };
   }
   if (candidate.correctOption && candidate.correctOption !== option.label) {
     return { ...base, status: "conflict", reviewNote: `Sualda artıq “${candidate.correctOption}” cavabı saxlanıb; avtomatik əvəz edilmədi.` };
   }
   if (candidate.correctOption === option.label) {
-    return { ...base, status: "already_set", reviewNote: "Eyni cavab açarı əvvəldən saxlanmışdır; mövcud mənbə dəyişdirilmədi." };
+    if (!candidate.correctAnswerSource) {
+      return { ...base, status: "needs_review", reviewNote: "Eyni cavab bazada var; PDF mənbəyini əlavə etmək üçün admin təsdiqi tələb olunur." };
+    }
+    return { ...base, status: "already_set", reviewNote: "Eyni cavab və mənbə əvvəldən saxlanmışdır; dəyişiklik edilmədi." };
   }
-  return { ...base, status: "applied", reviewNote: null };
+  return { ...base, status: "needs_review", reviewNote: "Dəqiq uyğunluq tapıldı; cavab yalnız admin təsdiqindən sonra saxlanacaq." };
 }

@@ -4,6 +4,7 @@ import { trpc } from "@/lib/trpc";
 import { errorMessage, formatBytes, formatDate } from "@/lib/study";
 
 const MAX_ANSWER_KEY_BYTES = 40 * 1024 * 1024;
+const REVIEW_PAGE_SIZE = 100;
 
 export default function AnswerKeyImportPanel() {
   const [file, setFile] = useState<File | null>(null);
@@ -11,12 +12,13 @@ export default function AnswerKeyImportPanel() {
   const [yearsText, setYearsText] = useState("");
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  const [queueOffset, setQueueOffset] = useState(0);
   const [selectedQuestions, setSelectedQuestions] = useState<Record<number, number>>({});
   const [selectedOptions, setSelectedOptions] = useState<Record<number, string>>({});
   const [replaceExisting, setReplaceExisting] = useState<Record<number, boolean>>({});
   const utils = trpc.useUtils();
   const filesQuery = trpc.answerKeys.files.useQuery();
-  const queueQuery = trpc.answerKeys.reviewQueue.useQuery();
+  const queueQuery = trpc.answerKeys.reviewQueue.useQuery({ limit: REVIEW_PAGE_SIZE, offset: queueOffset });
   const processMutation = trpc.answerKeys.processPdf.useMutation();
   const retryMutation = trpc.answerKeys.retryPdf.useMutation();
   const approveMutation = trpc.answerKeys.approveEntry.useMutation();
@@ -89,14 +91,33 @@ export default function AnswerKeyImportPanel() {
         const result = uploaded.duplicate
           ? await retryMutation.mutateAsync({ answerKeyFileId: uploaded.answerKeyFileId })
           : await processMutation.mutateAsync({ answerKeyFileId: uploaded.answerKeyFileId });
-        setMessage(`${result.applied} cavab avtomatik tətbiq edildi · ${result.alreadySet} eyni cavab əvvəldən vardı · ${result.openCount} sətir yoxlanışdadır. ${result.unmatched ? `${result.unmatched} uyğun sual tapılmadı.` : ""}${result.conflicts ? ` ${result.conflicts} mövcud cavabla ziddiyyətlidir.` : ""}`);
+        setMessage(`${result.matched} sual uyğunluğu tapıldı · ${result.alreadySet} eyni cavab əvvəldən təsdiqlənib · ${result.openCount} sətir admin yoxlanışındadır. ${result.unmatched ? `${result.unmatched} uyğun sual tapılmadı.` : ""}${result.conflicts ? ` ${result.conflicts} mövcud cavabla ziddiyyətlidir.` : ""}`);
       }
       setFile(null);
+      setQueueOffset(0);
       await refreshAnswerKeyData();
       void filesQuery.refetch();
       void queueQuery.refetch();
     } catch (cause) {
       setError(errorMessage(cause, "Cavab açarı PDF-i emal edilmədi."));
+      void filesQuery.refetch();
+    }
+  }
+
+  async function retryFile(answerKeyFileId: number, processingStatus: string) {
+    setError("");
+    setMessage("");
+    if (["completed", "needs_review"].includes(processingStatus)) {
+      const confirmed = window.confirm("Bu PDF yenidən AI ilə oxunacaq və yoxlanış sətirləri yenilənəcək. Artıq saxlanmış cavablar avtomatik dəyişdirilməyəcək. Davam edilsin?");
+      if (!confirmed) return;
+    }
+    try {
+      const result = await retryMutation.mutateAsync({ answerKeyFileId });
+      setMessage(`${result.matched} sual uyğunluğu tapıldı · ${result.alreadySet} eyni cavab əvvəldən təsdiqlənib · ${result.openCount} sətir admin yoxlanışındadır.`);
+      setQueueOffset(0);
+      await refreshAnswerKeyData();
+    } catch (cause) {
+      setError(errorMessage(cause, "Cavab açarı PDF-ini yenidən emal etmək alınmadı."));
       void filesQuery.refetch();
     }
   }
@@ -119,6 +140,7 @@ export default function AnswerKeyImportPanel() {
         replaceExisting: replace,
       });
       setMessage(`Sual ${entry.examYear ?? "—"} · ${entry.questionNumber ?? "—"} üçün cavab mənbə ilə təsdiqləndi.`);
+      setQueueOffset(0);
       await refreshAnswerKeyData();
     } catch (cause) {
       setError(errorMessage(cause, "Cavab açarını təsdiqləmək alınmadı."));
@@ -131,6 +153,7 @@ export default function AnswerKeyImportPanel() {
     try {
       await dismissMutation.mutateAsync({ entryId });
       setMessage("Sətir yoxlanış növbəsindən bağlandı; mənbə qeydi saxlanılıb.");
+      setQueueOffset(0);
       await refreshAnswerKeyData();
     } catch (cause) {
       setError(errorMessage(cause, "Sətiri bağlamaq alınmadı."));
@@ -143,7 +166,7 @@ export default function AnswerKeyImportPanel() {
         <div><h2 id="answer-key-title">Cavab açarı PDF-i</h2><p>İmtahan PDF-indən ayrı yükləyin; AI yalnız çap olunmuş cavabları oxuyur, sualı həll etmir.</p></div>
         <FileKey2 size={18} color="#719284" />
       </div>
-      <div className="answer-key-safety"><ShieldCheck size={16} /><span>Cavab açarı PDF-i verilənlər bazasında ayrıca qorunur və yalnız admin girişli marşrutla açılır. Yalnız dəqiq unikal uyğunluq və ən azı 95% əminlik olduqda avtomatik tətbiq edilir.</span></div>
+        <div className="answer-key-safety"><ShieldCheck size={16} /><span>Cavab açarı PDF-i verilənlər bazasında ayrıca qorunur və yalnız admin girişli marşrutla açılır. AI uyğun sualı təklif edir; düzgün cavab yalnız admin təsdiqindən sonra yazılır.</span></div>
 
       <div className="answer-key-upload-form">
         <div className="filter-field"><label htmlFor="answer-key-file">Cavab açarı PDF-i</label><input id="answer-key-file" className="field" type="file" accept="application/pdf,.pdf" disabled={busy} onChange={event => { chooseFile(event.target.files?.[0] ?? null); event.target.value = ""; }} /></div>
@@ -151,7 +174,7 @@ export default function AnswerKeyImportPanel() {
         <div className="filter-field"><label htmlFor="answer-key-years">İmtahan ili (istəyə görə)</label><input id="answer-key-years" className="field" placeholder="2010 və ya 2010, 2011" value={yearsText} disabled={busy} onChange={event => setYearsText(event.target.value)} /></div>
       </div>
       {file && <div className="answer-key-picked-file"><FileText size={15} /><span>{file.name} · {formatBytes(file.size)}</span><button className="icon-button" type="button" aria-label="Seçilmiş faylı sil" disabled={busy} onClick={() => setFile(null)}><X size={14} /></button></div>}
-      <p className="caption answer-key-help">İl PDF-də yazılmayıbsa bir il göstəricisi verin. Cavab işarəsi variantlarla uyğun gəlməsə, eyni nömrəli birdən çox sual tapsa və ya AI əminliyi 95%-dən aşağı olsa, sistem onu avtomatik yazmayacaq. Fayl limiti: 40 MB.</p>
+      <p className="caption answer-key-help">PDF-də il oxunmursa, bir il göstəricisi uyğun sualı yalnız təklif edə bilər. Variant uyğun gəlməsə, bir neçə sual tapılsa və ya AI əminliyi 95%-dən aşağı olsa, həmin sətir ayrıca yoxlanır. Yüksək əminlik də cavabı özü yazmır: hər təklif admin tərəfindən təsdiqlənməlidir. Fayl limiti: 40 MB.</p>
       {error && <div className="error-box answer-key-feedback" role="alert">{error}</div>}
       {message && <div className="notice-box answer-key-feedback" role="status">{message}</div>}
       <button className="btn btn-primary" type="button" onClick={() => void uploadAndProcess()} disabled={!file || busy}>
@@ -166,6 +189,7 @@ export default function AnswerKeyImportPanel() {
           <FileKey2 size={15} />
           <div className="answer-key-file-copy"><strong>{item.filename}</strong><span>{item.subjectName} · {item.years.length ? item.years.join(", ") : "İl PDF-dən müəyyən edilir"} · {item.entryCount} sətir · {formatBytes(item.fileSize)}</span><span className="caption">{item.statusMessage || statusLabel(item.processingStatus)} · {formatDate(item.createdAt)}</span></div>
           <span className={`tag${item.processingStatus === "needs_review" ? " warning" : item.processingStatus === "completed" ? " success" : ""}`}>{statusLabel(item.processingStatus)}</span>
+          {item.retryable && <button className="btn btn-secondary answer-key-open" type="button" disabled={busy} onClick={() => void retryFile(item.id, item.processingStatus)}>{item.processingStatus === "processing" ? "Emalı bərpa et" : "Yenidən emal et"}</button>}
           <a className="btn btn-secondary answer-key-open" href={`/api/admin/answer-keys/${item.id}/pdf`} target="_blank" rel="noreferrer"><FileText size={13} /> PDF-i aç</a>
         </div>)}
         {!filesQuery.isLoading && !filesQuery.isError && filesQuery.data?.length === 0 && <div className="empty-state"><div className="empty-icon"><FileKey2 size={17} /></div><h3>Cavab açarı yüklənməyib</h3><p>Cavab açarı PDF-i yüklənəndə mənbə məlumatı və uyğunlaşdırma nəticələri burada qalacaq.</p></div>}
@@ -175,7 +199,12 @@ export default function AnswerKeyImportPanel() {
         <div className="section-title-row"><div><h3>Yoxlanmalı cavab sətrləri</h3><p>Avtomatik tətbiq edilməyən uyğunluqlar burada saxlanır.</p></div><AlertTriangle size={17} color="#9a7b34" /></div>
         {queueQuery.isLoading && <div className="loading-state">Cavab uyğunluqları yüklənir…</div>}
         {queueQuery.isError && <div className="error-box">{errorMessage(queueQuery.error)} <button className="btn btn-secondary" onClick={() => void queueQuery.refetch()}>Yenidən yoxla</button></div>}
-        {!queueQuery.isLoading && !queueQuery.isError && queueQuery.data?.length === 0 && <p className="answer-key-empty">Yoxlanmalı cavab açarı sətri yoxdur.</p>}
+        {!queueQuery.isLoading && !queueQuery.isError && queueQuery.data?.length === 0 && <p className="answer-key-empty">{queueOffset === 0 ? "Yoxlanmalı cavab açarı sətri yoxdur." : "Bu səhifədə sətir qalmayıb; əvvəlki səhifəyə qayıdın."}</p>}
+        <div className="answer-key-queue-pagination">
+          <button className="btn btn-secondary" type="button" disabled={queueOffset === 0 || busy} onClick={() => setQueueOffset(Math.max(0, queueOffset - REVIEW_PAGE_SIZE))}>Daha yeni</button>
+          <span className="caption">Səhifə {Math.floor(queueOffset / REVIEW_PAGE_SIZE) + 1}</span>
+          <button className="btn btn-secondary" type="button" disabled={!queueQuery.data || queueQuery.data.length < REVIEW_PAGE_SIZE || busy} onClick={() => setQueueOffset(queueOffset + REVIEW_PAGE_SIZE)}>Daha köhnə</button>
+        </div>
         <div className="answer-key-review-list">{queueQuery.data?.map(entry => {
           const targetId = selectedQuestions[entry.id] ?? entry.matchedQuestionId ?? entry.candidateQuestionIds[0] ?? 0;
           const question = entry.candidateQuestions.find(candidate => candidate.id === targetId);
@@ -184,7 +213,7 @@ export default function AnswerKeyImportPanel() {
           const canConfirm = Boolean(question && optionValue && (!hasConflict || replaceExisting[entry.id]));
           return <article className="answer-key-review-card" key={entry.id}>
             <div className="answer-key-entry-head"><strong>{entry.examYear ?? "İl məlum deyil"} · Sual {entry.questionNumber ?? "—"} · çıxarılan cavab “{entry.answerToken || "—"}”</strong><span className={`tag${entry.status === "conflict" || entry.status === "ambiguous" ? " warning" : ""}`}>{statusLabel(entry.status)} · {Math.round(entry.confidence * 100)}%</span></div>
-            <p className="caption">{entry.subjectName} · {entry.filename}{entry.sourcePage ? ` · PDF səhifə ${entry.sourcePage}` : " · səhifə müəyyən edilməyib"}</p>
+            <p className="caption">{entry.subjectName} · {entry.filename}{entry.examYear === null && entry.fileYears.length === 1 ? ` · yükləmə ili göstəricisi: ${entry.fileYears[0]}` : ""}{entry.sourcePage ? ` · PDF səhifə ${entry.sourcePage}` : " · səhifə müəyyən edilməyib"}</p>
             {entry.reviewNote && <div className="answer-key-note">{entry.reviewNote}</div>}
             <a className="file-row-link answer-key-source-link" href={`/api/admin/answer-keys/${entry.answerKeyFileId}/pdf${entry.sourcePage ? `#page=${entry.sourcePage}` : ""}`} target="_blank" rel="noreferrer"><FileText size={13} /> Cavab mənbəsinin səhifəsini aç</a>
             {entry.candidateQuestions.length > 0 ? <>

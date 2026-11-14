@@ -34,10 +34,12 @@ describe("QəbulFit fixed catalog and reviewed seed", () => {
   });
 
   it("redacts answer values and private storage keys from public question records", () => {
-    const visible = redactQuestionForPublic({ id: 7, correctOption: "C", correctAnswerSource: "Rəsmi açar, s. 2", sourceStorageKey: "private/source.pdf" });
-    expect(visible).toMatchObject({ id: 7, hasVerifiedAnswer: true });
+    const visible = redactQuestionForPublic({ id: 7, correctOption: "C", correctAnswerSource: "Rəsmi açar, s. 2", sourceStorageKey: "private/source.pdf", updatedAt: new Date("2026-01-01T00:00:00Z") });
+    expect(visible).toMatchObject({ id: 7 });
     expect(visible).not.toHaveProperty("correctOption");
     expect(visible).not.toHaveProperty("correctAnswerSource");
     expect(visible).not.toHaveProperty("sourceStorageKey");
+    expect(visible).not.toHaveProperty("hasVerifiedAnswer");
+    expect(visible).not.toHaveProperty("updatedAt");
   });
 });

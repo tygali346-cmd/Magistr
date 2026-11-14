@@ -5,7 +5,9 @@ import AppShell from "@/components/AppShell";
 import ExpandableText from "@/components/ExpandableText";
 import QuestionMediaBlock from "@/components/QuestionMediaBlock";
 import { trpc } from "@/lib/trpc";
-import { errorMessage, type QuestionRecord, type TopicRecord } from "@/lib/study";
+import { errorMessage, type RouterOutput, type TopicRecord } from "@/lib/study";
+
+type ReviewQuestion = RouterOutput["questionBank"]["reviewQueue"][number];
 
 export default function ReviewPage() {
   const [location] = useLocation();
@@ -19,7 +21,7 @@ export default function ReviewPage() {
     ...(logicQuery.data ?? []).map(topic => ({ ...topic, subjectSlug: "mentiq" as const })),
   ];
   const queue = useMemo(() => {
-    const rows = [...((queueQuery.data ?? []) as QuestionRecord[])];
+    const rows = [...(queueQuery.data ?? [])];
     if (selectedId) rows.sort((a, b) => Number(b.id === selectedId) - Number(a.id === selectedId));
     return rows;
   }, [queueQuery.data, selectedId]);
@@ -76,7 +78,7 @@ export default function ReviewPage() {
 
 type ReviewInput = { questionId: number; subjectId: number | null; topicId: number | null; subtopicId: number | null; correctedText: string | null; correctOption: string | null; correctAnswerSource: string | null; answerKeyAction: "unchanged" | "set" | "clear"; reviewStatus: "checked" | "needs_review"; reviewNote: string | null };
 
-function ReviewEditor({ question, topics, subjects, onSave, saving }: { question: QuestionRecord; topics: (TopicRecord & { subjectSlug: "informatika" | "mentiq" })[]; subjects: { id: number; slug: string; name: string }[]; onSave: (input: ReviewInput) => Promise<unknown>; saving: boolean }) {
+function ReviewEditor({ question, topics, subjects, onSave, saving }: { question: ReviewQuestion; topics: (TopicRecord & { subjectSlug: "informatika" | "mentiq" })[]; subjects: { id: number; slug: string; name: string }[]; onSave: (input: ReviewInput) => Promise<unknown>; saving: boolean }) {
   const [subjectId, setSubjectId] = useState(question.subjectId ? String(question.subjectId) : "");
   const [topicId, setTopicId] = useState(question.topicId ? String(question.topicId) : "");
   const [subtopicId, setSubtopicId] = useState(question.subtopicId ? String(question.subtopicId) : "");

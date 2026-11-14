@@ -170,6 +170,27 @@ export const studyAttempts = mysqlTable(
   }),
 );
 
+/** Short-lived one-time capability binding a public test result to its complete question set. */
+export const practiceSessions = mysqlTable(
+  "practiceSessions",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    tokenHash: varchar("tokenHash", { length: 64 }).notNull(),
+    learnerKey: varchar("learnerKey", { length: 64 }).notNull(),
+    subjectId: int("subjectId").notNull().references(() => subjects.id),
+    topicId: int("topicId").references(() => topics.id),
+    examYear: int("examYear"),
+    questionIds: json("questionIds").$type<number[]>().notNull(),
+    expiresAt: timestamp("expiresAt").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  table => ({
+    tokenUnique: uniqueIndex("practice_sessions_token_hash_unique").on(table.tokenHash),
+    expirationIdx: index("practice_sessions_expires_at_idx").on(table.expiresAt),
+    learnerCreatedIdx: index("practice_sessions_learner_created_idx").on(table.learnerKey, table.createdAt),
+  }),
+);
+
 export const importJobs = mysqlTable(
   "importJobs",
   {
@@ -246,6 +267,7 @@ export const answerKeyEntries = mysqlTable(
 export type Question = typeof questions.$inferSelect;
 export type QuestionOption = typeof questionOptions.$inferSelect;
 export type StudyAttempt = typeof studyAttempts.$inferSelect;
+export type PracticeSession = typeof practiceSessions.$inferSelect;
 export type ImportJob = typeof importJobs.$inferSelect;
 export type AnswerKeyFile = typeof answerKeyFiles.$inferSelect;
 export type AnswerKeyEntry = typeof answerKeyEntries.$inferSelect;

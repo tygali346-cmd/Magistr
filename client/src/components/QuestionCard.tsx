@@ -15,7 +15,6 @@ export default function QuestionCard({ question, compact = false }: Props) {
           <span className="question-number">{question.examYear ?? "İl məlum deyil"} · Sual {question.questionNumber ?? "—"}</span>
           {question.topicName && <span className="tag">{question.topicNumber}. {question.topicName}</span>}
           {question.reviewStatus === "needs_review" && <span className="tag warning">Yoxlanış tələb edir</span>}
-          {question.hasVerifiedAnswer ? <span className="tag success">Mənbəli cavab mövcuddur</span> : <span className="tag">Cavab açarı yoxdur</span>}
         </div>
         <div className="question-actions">
           {!compact && <Link href={`/questions/${question.id}`} className="icon-button" aria-label="Sualı aç"><ExternalLink size={15} /></Link>}
@@ -40,7 +39,6 @@ export default function QuestionCard({ question, compact = false }: Props) {
       <div className="question-source">
         <span>{question.sourceTitle || question.sourceFilename || "Mənbə göstərilməyib"}</span>
         {question.sourcePage && <span>Səhifə {question.sourcePage}</span>}
-        {!question.hasVerifiedAnswer && <span>Cavab yoxlanışı deaktivdir</span>}
         {question.sourceUrl?.startsWith("manual://") && <span>Əl ilə əlavə olunub</span>}
       </div>
     </article>

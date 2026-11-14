@@ -26,9 +26,12 @@ export default function PracticePage() {
   const [step, setStep] = useState(0);
   const [answers, setAnswers] = useState<Record<number, string>>({});
   const [result, setResult] = useState<AttemptResult | null>(null);
+  const [sessionToken, setSessionToken] = useState("");
+  const [starting, setStarting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
   const practiceQuery = trpc.questionBank.practiceQuestions.useQuery({ subjectSlug, topicSlug, examYear: year ? Number(year) : undefined, limit: 200 }, { enabled: !!topic });
+  const startAttemptMutation = trpc.questionBank.startAttempt.useMutation();
   const saveAttempt = trpc.questionBank.saveAttempt.useMutation();
   const practiceQuestions = (practiceQuery.data ?? []) as PracticeQuestion[];
   const years = [...new Set((examsQuery.data ?? []).flatMap(file => file.years ?? []))].sort((a, b) => b - a);
@@ -36,16 +39,46 @@ export default function PracticePage() {
   const resultByQuestion = useMemo(() => new Map((result?.answers ?? []).map(answer => [answer.questionId, answer])), [result]);
   const wrong = practiceQuestions.filter(question => resultByQuestion.get(question.id)?.isScored && resultByQuestion.get(question.id)?.isCorrect === false);
 
+  async function beginTest() {
+    if (!practiceQuestions.length || starting) return;
+    setStarting(true);
+    setSaveError("");
+    try {
+      const session = await startAttemptMutation.mutateAsync({
+        learnerKey: getLearnerKey(),
+        subjectSlug,
+        topicSlug,
+        examYear: year ? Number(year) : null,
+        questionIds: practiceQuestions.map(question => question.id),
+      });
+      setSessionToken(session.sessionToken);
+      setStarted(true);
+      setStep(0);
+      setAnswers({});
+    } catch (error) {
+      setSaveError(errorMessage(error, "Test sessiyası başlatmaq alınmadı. Sualları yeniləyib təkrar cəhd edin."));
+      void practiceQuery.refetch();
+    } finally {
+      setStarting(false);
+    }
+  }
+
   async function finish() {
     if (!practiceQuestions.length || saving) return;
+    if (!sessionToken) {
+      setSaveError("Test sessiyası bitib. Nəticəni görmək üçün testi yenidən başladın.");
+      setStarted(false);
+      return;
+    }
     setSaving(true);
     setSaveError("");
     try {
       const response = await saveAttempt.mutateAsync({
-        learnerKey: getLearnerKey(), subjectSlug, topicSlug, examYear: year ? Number(year) : null,
+        learnerKey: getLearnerKey(), sessionToken,
         answers: practiceQuestions.map(question => ({ questionId: question.id, selectedOption: answers[question.id] ?? null })),
       });
       setResult(response as AttemptResult);
+      setSessionToken("");
       setStarted(false);
     } catch (error) {
       setSaveError(errorMessage(error, "Nəticə saxlanmadı. Yenidən cəhd edin."));
@@ -58,6 +91,7 @@ export default function PracticePage() {
     setResult(null);
     setAnswers({});
     setStep(0);
+    setSessionToken("");
     setStarted(false);
     setSaveError("");
   }
@@ -74,15 +108,16 @@ export default function PracticePage() {
         {!practiceQuery.isLoading && !practiceQuery.isError && !practiceQuestions.length && <div className="empty-state"><div className="empty-icon"><FileQuestion size={18} /></div><h3>Bu mövzuda hələ sual yoxdur</h3><p>{subjectSlug === "mentiq" ? "Məntiq sualları hələ ayrıca yüklənməyib." : "Başqa mövzu seçə və ya bütün illərin suallarını gözləyə bilərsiniz."}</p><Link href={`/subjects/${subjectSlug}`} className="btn btn-secondary" style={{ marginTop: 14 }}>Mövzulara qayıt</Link></div>}
         {!practiceQuery.isLoading && !practiceQuery.isError && practiceQuestions.length > 0 && !started && !result && <section className="card card-pad">
           <div className="section-title-row"><div><h2>Testi başlat</h2><p>Suallar: {practiceQuestions.length}{practiceQuestions.length === 200 ? " · ilk 200 sual" : ""}</p></div><span className="tag">{practiceQuestions.filter(question => question.options.length > 0).length} cavab variantlı sual</span></div>
-          <div className="filter-field" style={{ maxWidth: 260 }}><label htmlFor="practice-year">İmtahan ili</label><select id="practice-year" className="select-field" value={year} onChange={event => { setYear(event.target.value); setResult(null); setAnswers({}); setStep(0); }}><option value="">Bütün illər</option>{years.map(item => <option key={item} value={item}>{item}</option>)}</select></div>
+          <div className="filter-field" style={{ maxWidth: 260 }}><label htmlFor="practice-year">İmtahan ili</label><select id="practice-year" className="select-field" value={year} onChange={event => { setYear(event.target.value); setResult(null); setAnswers({}); setSessionToken(""); setStep(0); }}><option value="">Bütün illər</option>{years.map(item => <option key={item} value={item}>{item}</option>)}</select></div>
           <div className="notice-box" style={{ marginTop: 14 }}><CircleHelp size={14} style={{ display: "inline", verticalAlign: "-3px", marginRight: 5 }} /> Cavab açarı məlum olmayan suallar “yoxlanılmamış” kimi sayılır; sistem cavabı özü uydurmur.</div>
-          <button className="btn btn-primary" style={{ marginTop: 16 }} onClick={() => { setStarted(true); setStep(0); }}><ArrowRight size={14} /> Testə başla</button>
+          {saveError && <div className="error-box" style={{ marginTop: 12 }}>{saveError}</div>}
+          <button className="btn btn-primary" style={{ marginTop: 16 }} disabled={starting} onClick={() => void beginTest()}><ArrowRight size={14} /> {starting ? "Test hazırlanır…" : "Testə başla"}</button>
         </section>}
         {started && current && <>
           <div className="quiz-progress-head"><span>Sual {step + 1} / {practiceQuestions.length}</span><span>{Object.keys(answers).length} cavab seçilib</span></div>
           <div className="progress-track"><div className="progress-fill" style={{ width: `${((step + 1) / practiceQuestions.length) * 100}%` }} /></div>
           <section className="card quiz-card">
-            <div className="quiz-question-top"><h2>{current.examYear ?? "İl göstərilməyib"} · Sual {current.questionNumber ?? "—"}</h2><span className={`tag${current.hasVerifiedAnswer ? " success" : " warning"}`}>{current.hasVerifiedAnswer ? "Cavab test sonunda açıqlanacaq" : "Etibarlı cavab açarı yoxdur"}</span></div>
+            <div className="quiz-question-top"><h2>{current.examYear ?? "İl göstərilməyib"} · Sual {current.questionNumber ?? "—"}</h2><span className="tag">Nəticə testi bitirdikdən sonra göstəriləcək</span></div>
             <p className="quiz-question">{current.originalText}</p>
             {current.media?.map((media, index) => <QuestionMediaBlock media={media} key={`${media.kind}-${index}`} />)}
             <div className="quiz-options">
@@ -95,7 +130,7 @@ export default function PracticePage() {
               {step < practiceQuestions.length - 1 ? <button className="btn btn-primary" onClick={() => setStep(value => value + 1)}>Növbəti <ArrowRight size={14} /></button> : <button className="btn btn-primary" disabled={saving} onClick={finish}>{saving ? "Nəticə saxlanır…" : "Testi bitir"} <Check size={14} /></button>}
             </span></div>
           </section>
-          {saveError && <div className="error-box" style={{ marginTop: 12 }}>{saveError}</div>}
+          {saveError && <div className="error-box" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, marginTop: 12 }}><span>{saveError}</span><button className="btn btn-secondary" type="button" onClick={restart}>Testi yenidən qur</button></div>}
         </>}
         {result && <section className="card results-panel">
           <div className="section-title-row"><div><h2>Test nəticəsi</h2><p>Yoxlanmış cavablar əsasında hesablanıb</p></div><button className="btn btn-secondary" onClick={restart}><RotateCcw size={14} /> Yenidən başla</button></div>

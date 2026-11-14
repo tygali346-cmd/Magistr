@@ -1,13 +1,14 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import path from "node:path";
-import { and, count, desc, eq, gte, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { SUBJECT_CATALOG, TOPIC_CATALOG, type SubjectSlug } from "@shared/topicCatalog";
-import { examFiles, importJobs, questionOptions, questions, studyAttempts, subjects, topics, type AttemptAnswer, type QuestionMedia } from "../drizzle/schema";
+import { examFiles, importJobs, practiceSessions, questionOptions, questions, studyAttempts, subjects, topics, type AttemptAnswer, type QuestionMedia } from "../drizzle/schema";
 import { extractPdfWithGemini } from "./gemini";
 import { adminProcedure, publicProcedure, router } from "./_core/trpc";
 import { storageGetSignedUrl, storagePut } from "./storage";
+import { hasExactQuestionSet } from "./practiceSessionLogic";
 import {
   getDashboardData,
   getExamFileById,
@@ -265,9 +266,9 @@ function questionSequenceWarnings(imported: ImportQuestion[], fileYears: number[
   return warnings;
 }
 
-export function redactQuestionForPublic<T extends { correctOption: string | null; correctAnswerSource: string | null; sourceStorageKey?: string | null }>(row: T) {
-  const { correctOption, correctAnswerSource, sourceStorageKey: _storageKey, ...visible } = row;
-  return { ...visible, hasVerifiedAnswer: Boolean(correctOption && correctAnswerSource) };
+export function redactQuestionForPublic<T extends { correctOption: string | null; correctAnswerSource: string | null; sourceStorageKey?: string | null; updatedAt?: unknown }>(row: T) {
+  const { correctOption: _correctOption, correctAnswerSource: _correctAnswerSource, sourceStorageKey: _storageKey, updatedAt: _updatedAt, ...visible } = row;
+  return visible;
 }
 
 async function persistExtractedQuestions(examFileId: number, fileSha: string, fileYears: number[], imported: ImportQuestion[], extractionWarnings: string[]) {
@@ -420,7 +421,10 @@ export const questionBankRouter = router({
     if (!question) throw new TRPCError({ code: "NOT_FOUND", message: "Sual tapılmadı." });
     return redactQuestionForPublic(question);
   }),
-  reviewQueue: adminProcedure.query(async () => (await listQuestions({ needsReview: true, limit: 200, sort: "recent" })).map(redactQuestionForPublic)),
+  reviewQueue: adminProcedure.query(async () => (await listQuestions({ needsReview: true, limit: 200, sort: "recent" })).map(({ sourceStorageKey: _storageKey, ...question }) => ({
+    ...question,
+    hasVerifiedAnswer: Boolean(question.correctOption && question.correctAnswerSource),
+  }))),
   highConfidenceReviewCount: adminProcedure.query(async () => {
     const db = await requireDatabase();
     const [result] = await db.select({ value: count() }).from(questions).where(highConfidenceReviewCondition());
@@ -489,47 +493,122 @@ export const questionBankRouter = router({
     });
   }),
   attempts: publicProcedure.input(z.object({ learnerKey: z.string().min(16).max(64), limit: z.number().int().min(1).max(100).optional() })).query(({ input }) => getLearnerAttempts(input.learnerKey, input.limit)),
-  saveAttempt: publicProcedure.input(z.object({
-    learnerKey: z.string().min(16).max(64), subjectSlug: z.enum(["informatika", "mentiq"]), topicSlug: z.string().max(96).nullable(), examYear: z.number().int().min(1900).max(2100).nullable(),
-    answers: z.array(z.object({ questionId: z.number().int().positive(), selectedOption: z.string().max(8).nullable() }).strict()).min(1).max(200),
-  })).mutation(async ({ input }) => {
-    const db = await requireDatabase();
+  startAttempt: publicProcedure.input(z.object({
+    learnerKey: z.string().min(16).max(64),
+    subjectSlug: z.enum(["informatika", "mentiq"]),
+    topicSlug: z.string().max(96),
+    examYear: z.number().int().min(1900).max(2100).nullable(),
+    questionIds: z.array(z.number().int().positive()).min(1).max(200),
+  }).strict()).mutation(async ({ input }) => {
     const subject = await getSubjectBySlug(input.subjectSlug);
     if (!subject) throw new TRPCError({ code: "BAD_REQUEST", message: "Fənn tapılmadı." });
-    const topic = input.topicSlug ? await getTopicBySlug(input.topicSlug) : null;
-    if (input.topicSlug && (!topic || topic.subjectId !== subject.id)) throw new TRPCError({ code: "BAD_REQUEST", message: "Mövzu seçilmiş fənnə uyğun deyil." });
-    const answers = [...new Map(input.answers.map(answer => [answer.questionId, answer])).values()];
-    const ids = answers.map(answer => answer.questionId);
-    const questionRows = await db.select().from(questions).where(inArray(questions.id, ids));
-    if (questionRows.length !== ids.length) throw new TRPCError({ code: "BAD_REQUEST", message: "Testdə olmayan sual göndərilib." });
-    const optionRows = await db.select().from(questionOptions).where(inArray(questionOptions.questionId, ids));
-    const optionsByQuestion = new Map<number, typeof optionRows>();
-    for (const option of optionRows) optionsByQuestion.set(option.questionId, [...(optionsByQuestion.get(option.questionId) ?? []), option]);
-    let correctCount = 0;
-    let incorrectCount = 0;
-    let unscoredCount = 0;
-    const scoredAnswers: AttemptAnswer[] = answers.map(answer => {
-      const question = questionRows.find(row => row.id === answer.questionId)!;
-      if (question.subjectId !== subject.id || (topic && question.topicId !== topic.id) || (input.examYear && question.examYear !== input.examYear)) throw new TRPCError({ code: "BAD_REQUEST", message: "Test sualları seçilmiş fənn, mövzu və ya ilə uyğun deyil." });
-      const selectedExists = answer.selectedOption !== null && (optionsByQuestion.get(question.id) ?? []).some(option => option.label === answer.selectedOption);
-      const isScored = !!question.correctOption && selectedExists;
-      const isCorrect = isScored ? answer.selectedOption === question.correctOption : null;
-      if (!isScored) unscoredCount += 1;
-      else if (isCorrect) correctCount += 1;
-      else incorrectCount += 1;
-      return { questionId: question.id, selectedOption: selectedExists ? answer.selectedOption : null, verifiedCorrectOption: isScored && !isCorrect ? question.correctOption : null, isScored, isCorrect };
+    const topic = await getTopicBySlug(input.topicSlug);
+    if (!topic || topic.subjectId !== subject.id) throw new TRPCError({ code: "BAD_REQUEST", message: "Mövzu seçilmiş fənnə uyğun deyil." });
+    const offeredQuestions = await listQuestions({
+      subjectSlug: input.subjectSlug,
+      topicSlug: input.topicSlug,
+      examYear: input.examYear ?? undefined,
+      limit: 200,
+      sort: "exam",
     });
-    const scoredQuestions = correctCount + incorrectCount;
-    const scorePercent = scoredQuestions ? Math.round(correctCount / scoredQuestions * 100) : null;
-    const result = await db.insert(studyAttempts).values({ learnerKey: input.learnerKey, subjectId: subject.id, topicId: topic?.id ?? null, examYear: input.examYear, totalQuestions: scoredAnswers.length, scoredQuestions, correctCount, incorrectCount, unscoredCount, scorePercent, answers: scoredAnswers });
-    const attemptId = Number((result as unknown as [{ insertId: number }])[0]?.insertId);
-    return { attemptId: Number.isFinite(attemptId) ? attemptId : null, totalQuestions: scoredAnswers.length, scoredQuestions, correctCount, incorrectCount, unscoredCount, scorePercent, answers: scoredAnswers };
+    const questionIds = offeredQuestions.map(question => question.id);
+    if (!hasExactQuestionSet(questionIds, input.questionIds)) {
+      throw new TRPCError({ code: "CONFLICT", message: "Test sualları yenilənib. Siyahını yeniləyib testi yenidən başladın." });
+    }
+
+    const db = await requireDatabase();
+    const now = new Date();
+    await db.delete(practiceSessions).where(lte(practiceSessions.expiresAt, now));
+    const sessionToken = randomBytes(32).toString("hex");
+    const expiresAt = new Date(now.getTime() + 2 * 60 * 60 * 1000);
+    await db.insert(practiceSessions).values({
+      tokenHash: sha256(sessionToken),
+      learnerKey: input.learnerKey,
+      subjectId: subject.id,
+      topicId: topic.id,
+      examYear: input.examYear,
+      questionIds,
+      expiresAt,
+    });
+    return { sessionToken, expiresAt: expiresAt.toISOString(), questionCount: questionIds.length };
+  }),
+  saveAttempt: publicProcedure.input(z.object({
+    learnerKey: z.string().min(16).max(64), sessionToken: z.string().length(64),
+    answers: z.array(z.object({ questionId: z.number().int().positive(), selectedOption: z.string().max(8).nullable() }).strict()).min(1).max(200),
+  }).strict()).mutation(async ({ input }) => {
+    const db = await requireDatabase();
+    return db.transaction(async tx => {
+      const [session] = await tx.select().from(practiceSessions).where(and(
+        eq(practiceSessions.tokenHash, sha256(input.sessionToken)),
+        eq(practiceSessions.learnerKey, input.learnerKey),
+      )).for("update");
+      if (!session || session.expiresAt.getTime() <= Date.now()) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Test sessiyası tapılmadı və ya vaxtı bitib. Testi yenidən başladın." });
+      }
+
+      const answers = input.answers;
+      const ids = session.questionIds;
+      if (session.topicId === null) throw new TRPCError({ code: "CONFLICT", message: "Test mövzusu tapılmadı. Testi yenidən başladın." });
+      const currentQuestionPredicate = session.examYear === null
+        ? and(eq(questions.subjectId, session.subjectId), eq(questions.topicId, session.topicId))!
+        : and(eq(questions.subjectId, session.subjectId), eq(questions.topicId, session.topicId), eq(questions.examYear, session.examYear))!;
+      const currentOfferedQuestions = await tx.select({ id: questions.id }).from(questions)
+        .where(currentQuestionPredicate)
+        .orderBy(asc(questions.examYear), asc(questions.questionNumber))
+        .limit(200)
+        .for("update");
+      if (!hasExactQuestionSet(ids, currentOfferedQuestions.map(question => question.id))) {
+        throw new TRPCError({ code: "CONFLICT", message: "Mövzunun sual siyahısı test başlayandan sonra dəyişib. Siyahını yeniləyib testi yenidən başladın." });
+      }
+      if (!hasExactQuestionSet(ids, answers.map(answer => answer.questionId))) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Nəticə yalnız sessiyadakı bütün suallar üçün göndərilə bilər." });
+      }
+      const questionRows = await tx.select().from(questions).where(inArray(questions.id, ids));
+      if (questionRows.length !== ids.length) throw new TRPCError({ code: "CONFLICT", message: "Test suallarından biri dəyişib və ya silinib. Testi yenidən başladın." });
+      const optionRows = await tx.select().from(questionOptions).where(inArray(questionOptions.questionId, ids));
+      const optionsByQuestion = new Map<number, typeof optionRows>();
+      for (const option of optionRows) optionsByQuestion.set(option.questionId, [...(optionsByQuestion.get(option.questionId) ?? []), option]);
+      let correctCount = 0;
+      let incorrectCount = 0;
+      let unscoredCount = 0;
+      const scoredAnswers: AttemptAnswer[] = answers.map(answer => {
+        const question = questionRows.find(row => row.id === answer.questionId)!;
+        if (question.subjectId !== session.subjectId || (session.topicId && question.topicId !== session.topicId) || (session.examYear !== null && question.examYear !== session.examYear)) {
+          throw new TRPCError({ code: "CONFLICT", message: "Test suallarının fənni, mövzusu və ya ili dəyişib. Testi yenidən başladın." });
+        }
+        const selectedExists = answer.selectedOption !== null && (optionsByQuestion.get(question.id) ?? []).some(option => option.label === answer.selectedOption);
+        const isScored = !!question.correctOption && selectedExists;
+        const isCorrect = isScored ? answer.selectedOption === question.correctOption : null;
+        if (!isScored) unscoredCount += 1;
+        else if (isCorrect) correctCount += 1;
+        else incorrectCount += 1;
+        return { questionId: question.id, selectedOption: selectedExists ? answer.selectedOption : null, verifiedCorrectOption: isScored && !isCorrect ? question.correctOption : null, isScored, isCorrect };
+      });
+      const scoredQuestions = correctCount + incorrectCount;
+      const scorePercent = scoredQuestions ? Math.round(correctCount / scoredQuestions * 100) : null;
+      const result = await tx.insert(studyAttempts).values({
+        learnerKey: session.learnerKey,
+        subjectId: session.subjectId,
+        topicId: session.topicId,
+        examYear: session.examYear,
+        totalQuestions: scoredAnswers.length,
+        scoredQuestions,
+        correctCount,
+        incorrectCount,
+        unscoredCount,
+        scorePercent,
+        answers: scoredAnswers,
+      });
+      const attemptId = Number((result as unknown as [{ insertId: number }])[0]?.insertId);
+      await tx.delete(practiceSessions).where(eq(practiceSessions.id, session.id));
+      return { attemptId: Number.isFinite(attemptId) ? attemptId : null, totalQuestions: scoredAnswers.length, scoredQuestions, correctCount, incorrectCount, unscoredCount, scorePercent, answers: scoredAnswers };
+    });
   }),
   exportBackup: adminProcedure.query(async () => {
     const subjectsData = await listSubjects();
     const examsData = await listExamFiles();
     const topicsData = (await Promise.all(SUBJECT_CATALOG.map(subject => listTopics(subject.slug)))).flat();
-    type PublicQuestion = Omit<Awaited<ReturnType<typeof listQuestions>>[number], "correctOption" | "correctAnswerSource" | "sourceStorageKey"> & { hasVerifiedAnswer: boolean };
+    type PublicQuestion = Omit<Awaited<ReturnType<typeof listQuestions>>[number], "correctOption" | "correctAnswerSource" | "sourceStorageKey" | "updatedAt">;
     const allQuestions: PublicQuestion[] = [];
     for (let offset = 0; offset < 100000; offset += 200) {
       const batch = await listQuestions({ limit: 200, offset, sort: "exam" });

@@ -177,19 +177,25 @@
 - [x] Say serverdən hesablanmalı, əməliyyat admin identifikasiyası ilə qorunmalı və təsdiq zamanı say dəyişibsə köhnə say əsasında əməliyyat aparılmamalıdır.
 - [x] `uncertain=true` olan yeni idxal sualında `reviewNote` boş qalmamalı; qeyddə yoxlanış səbəbi göstərilməlidir.
 
-Yekun yoxlama: `pnpm check` keçdi; `pnpm test` — 7 faylda 34 test keçdi; `pnpm build` keçdi. Bu checkout-da DB bağlantısı və canlı admin sessiyası olmadığı üçün high-confidence sayının əvvəlki/sonrakı rəqəmləri oxunmadı; toplu təsdiq əməliyyatı başladılmadı.
+Yekun yoxlama: `pnpm check` və `pnpm build` keçdi; `pnpm test` — 9 faylda 51 test keçdi. Toplu təsdiq üçün canlı admin əməliyyatı başladılmadı.
+
 
 ## 15. Answer-key PDF importu və təhlükəsiz uyğunlaşdırma
 
-- [ ] Admin imtahan sualı PDF-indən ayrı cavab açarı PDF-i yükləyə, fənni seçə və il göstəricisini istəyə görə verə bilməlidir.
-- [ ] Gemini yalnız açıq şəkildə çap olunmuş sual nömrəsi, imtahan ili, cavab işarəsi və PDF səhifəsini çıxarmalı; sualı həll etməməli və cavab uydurmamalıdır.
-- [ ] Cavab açarı yalnız eyni fənn + il + sual nömrəsi üzrə tək sualla dəqiq uyğun gələndə, cavab işarəsi həmin sualın mövcud variantlarından biri olanda və AI əminliyi ən azı 95% olanda avtomatik tətbiq edilməlidir.
-- [ ] İl/sual nömrəsi çatışmayan, AI əminliyi 95%-dən aşağı, variant işarəsi uyğun olmayan, birdən çox sualla uyğun gələn və ya mövcud cavab açarı ilə ziddiyyət yaradan sətirlər avtomatik tətbiq edilməməli, ayrıca admin yoxlanışında göstərilməlidir.
-- [ ] Cavab açarı PDF-i, orijinal fayl adı və səhifə istinadı məlumat bazasında saxlanmalı; təsdiqlənmiş cavabda etibarlı mənbə kimi görünməlidir.
-- [ ] Bu import və cavab təsdiqi yalnız konfiqurasiya olunmuş admin üçün açıq olmalı; cavab açarı public API-dən sızmamalı və test bitənədək gizli qalmalıdır.
+- [x] Admin imtahan sualı PDF-indən ayrı cavab açarı PDF-i yükləyə, fənni seçə və il göstəricisini istəyə görə verə bilməlidir.
+- [x] Gemini yalnız açıq şəkildə çap olunmuş sual nömrəsi, imtahan ili, cavab işarəsi və PDF səhifəsini çıxarmalı; sualı həll etməməli və cavab uydurmamalıdır.
+- [x] Cavab açarı yalnız eyni fənn + PDF-də çap olunmuş il + sual nömrəsi üzrə tək sualla dəqiq uyğun gələndə, cavab işarəsi həmin sualın mövcud variantlarından biri olanda və AI əminliyi ən azı 95% olanda dəqiq uyğunluq təklifi kimi göstərilməlidir; AI heç bir cavabı özü yazmamalı, admin təsdiqi tələb olunmalıdır.
+- [x] İl/sual nömrəsi çatışmayan, AI əminliyi 95%-dən aşağı, variant işarəsi uyğun olmayan, birdən çox sualla uyğun gələn və ya mövcud cavab açarı ilə ziddiyyət yaradan sətirlər avtomatik tətbiq edilməməli, ayrıca admin yoxlanışında göstərilməlidir.
+- [x] Cavab açarı PDF-i, orijinal fayl adı və səhifə istinadı məlumat bazasında saxlanmalı; təsdiqlənmiş cavabda etibarlı mənbə kimi görünməlidir.
+- [x] Bu import və cavab təsdiqi yalnız konfiqurasiya olunmuş admin üçün açıq olmalı; cavab açarı public API-dən sızmamalı və test bitənədək gizli qalmalıdır.
+
+Yekun yoxlama: `pnpm check`, `pnpm build`, health/route manifest və icazəsiz upload/private PDF üçün HTTP 401 yoxlamaları keçdi; `pnpm test` — 9 faylda 51 test keçdi. Canlı Gemini cavab açarı PDF importu aparılmadı; bu sessiyada nümunə PDF təqdim edilməyib.
+
 
 ## 16. Cavab açarının test tamamlanana qədər gizli qalması
 
-- [ ] Test başlayanda server həmin testin tam sual siyahısına bağlı, müddəti bitən server sessiyası yaratmalıdır.
-- [ ] Nəticə endpoint-i yalnız həmin sessiyaya aid bütün suallar cavablandırılıb test bitdikdə cavab açarını qaytarmalı; sessiyasız, natamam, təkrar istifadə edilmiş və ya başqa suallı cəhd rədd edilməlidir.
-- [ ] Public sual və test API-ləri test başlamazdan və bitməzdən əvvəl nə düzgün variantı, nə də cavab açarının mövcudluğu barədə məlumatı açıqlamalıdır.
+- [x] Test başlayanda server həmin testin tam sual siyahısına bağlı, müddəti bitən server sessiyası yaratmalıdır.
+- [x] Nəticə endpoint-i yalnız həmin sessiyanın bütün sual identifikatorları üzrə seçim (variant və ya boş cavab) göndərilib test bitdikdə cavab açarını qaytarmalı; sessiyasız, natamam, təkrar istifadə edilmiş, sual siyahısı dəyişmiş və ya başqa suallı cəhd rədd edilməl.
+- [x] Public sual və test API-ləri test başlamazdan və bitməzdən əvvəl nə düzgün variantı, nə də cavab açarının mövcudluğu barədə məlumatı açıqlamalıdır.
+
+Yekun yoxlama: `practiceSessions` cədvəli shared DB-yə yalnız yeni cədvəl kimi əlavə edildi; public redaction, tam sual dəsti, müddətin bitməsi və birdəfəlik istifadə kod/test ilə yoxlanıldı.

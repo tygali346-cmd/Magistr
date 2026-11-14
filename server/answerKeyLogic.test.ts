@@ -19,13 +19,13 @@ function classify(overrides: Partial<Parameters<typeof classifyAnswerKeyEntry>[0
 }
 
 describe("answer-key matching policy", () => {
-  it("auto-applies only an exact unique match with a recognized option at 95%+", () => {
+  it("suggests an exact unique 95%+ match but requires admin confirmation before writing", () => {
     expect(classify()).toMatchObject({
-      status: "applied",
+      status: "needs_review",
       matchedQuestionId: 17,
       candidateQuestionIds: [17],
       suggestedOption: "B",
-      reviewNote: null,
+      reviewNote: expect.stringContaining("admin təsdiqindən sonra"),
     });
   });
 
@@ -34,6 +34,14 @@ describe("answer-key matching policy", () => {
       status: "needs_review",
       matchedQuestionId: 17,
       suggestedOption: "B",
+    });
+  });
+
+  it("keeps a year supplied only as an upload hint in manual review", () => {
+    expect(classify({ yearWasPrinted: false })).toMatchObject({
+      status: "needs_review",
+      matchedQuestionId: 17,
+      reviewNote: expect.stringContaining("PDF-dən çıxarılmadı"),
     });
   });
 
@@ -73,8 +81,12 @@ describe("answer-key matching policy", () => {
     expect(classify({ candidates: [{ ...candidate, correctOption: "C" }] }).status).toBe("conflict");
   });
 
-  it("records a matching key as already set without overwriting its source", () => {
+  it("requires admin confirmation before attaching provenance to an existing answer", () => {
     expect(classify({ candidates: [{ ...candidate, correctOption: "B" }] })).toMatchObject({
+      status: "needs_review",
+      suggestedOption: "B",
+    });
+    expect(classify({ candidates: [{ ...candidate, correctOption: "B", correctAnswerSource: "Official PDF" }] })).toMatchObject({
       status: "already_set",
       suggestedOption: "B",
     });

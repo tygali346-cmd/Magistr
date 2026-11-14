@@ -593,13 +593,15 @@ h1, h2, h3, h4, .display-type { font-family: "DM Sans", "Noto Sans", sans-serif;
 .answer-key-feedback { margin: 12px 0; }
 .answer-key-files, .answer-key-review { margin-top: 30px; }
 .answer-key-files > h3 { margin: 0 0 10px; color: #3f574c; font-size: 15px; }
-.answer-key-file-row { grid-template-columns: 20px minmax(0, 1fr) auto auto; margin-top: 8px; }
+.answer-key-file-row { grid-template-columns: 20px minmax(0, 1fr) auto auto auto; margin-top: 8px; }
 .answer-key-file-row > svg { color: #729286; }
 .answer-key-file-copy { display: grid; gap: 3px; }
 .answer-key-file-copy strong { color: #354c42; font-size: 13px; }
 .answer-key-file-copy span { color: #78877f; font-size: 12px; overflow-wrap: anywhere; }
 .answer-key-open { min-height: 44px; }
 .answer-key-review { padding-top: 24px; border-top: 1px solid var(--app-line); }
+.answer-key-queue-pagination { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 10px 0 14px; }
+.answer-key-queue-pagination .caption { text-align: center; }
 .answer-key-review-list { display: grid; gap: 12px; }
 .answer-key-review-card { min-width: 0; padding: 15px; border: 1px solid #e5e7d9; border-radius: 13px; background: #fcfcf8; }
 .answer-key-entry-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
