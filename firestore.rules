@@ -373,7 +373,7 @@ service cloud.firestore {
         && incoming().sourceFingerprint == existing().sourceFingerprint
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
-        && incoming().diff(existing()).affectedKeys().hasOnly(['subjectSlug', 'topicSlug', 'subtopicSlug', 'correctionSuggestion', 'reviewStatus', 'reviewNote', 'updatedAt']);
+        && incoming().diff(existing()).affectedKeys().hasOnly(['subjectSlug', 'topicSlug', 'subtopicSlug', 'correctionSuggestion', 'media', 'reviewStatus', 'reviewNote', 'updatedAt']);
       allow delete: if isAdmin() && isValidId(questionId);
     }
 

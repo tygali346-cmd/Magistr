@@ -1,7 +1,7 @@
 import { ExternalLink, FileText, PencilLine } from "lucide-react";
 import { Link } from "wouter";
 import ExpandableText from "@/components/ExpandableText";
-import QuestionMediaBlock from "@/components/QuestionMediaBlock";
+import QuestionMediaBlock, { ZoomableMediaImage, isMediaImage } from "@/components/QuestionMediaBlock";
 import type { QuestionRecord } from "@/lib/study";
 
 type Props = { question: QuestionRecord; compact?: boolean };
@@ -25,25 +25,29 @@ export default function QuestionCard({ question, compact = false }: Props) {
       {question.correctionSuggestion && (
         <div className="review-status-note"><strong>OCR düzəliş təklifi:</strong> {question.correctionSuggestion}</div>
       )}
+      {question.media?.map((media, index) => <QuestionMediaBlock media={media} questionNumber={question.questionNumber} key={`${media.kind}-${index}`} />)}
       {question.options.length > 0 && (
         <div className="question-options">
           {question.options.map(option => {
-            const optionMedia = question.media?.find(m => m.role === "option" && m.optionLabel === option.label);
+            const optionMedias = (question.media ?? []).filter(
+              m => m.role === "option" && m.optionLabel?.toLowerCase() === option.label.toLowerCase(),
+            );
             return (
               <div className="option-line" key={option.id}>
                 <span className="option-line-label">{option.label}</span>
-                <div style={{ flex: 1 }}>
-                  <span>{option.optionText}</span>
-                  {optionMedia && (
-                    <div style={{ marginTop: 6 }}>
-                      <img
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  {option.optionText && <span>{option.optionText}</span>}
+                  {optionMedias.map((optionMedia, idx) =>
+                    isMediaImage(optionMedia) ? (
+                      <ZoomableMediaImage
+                        key={idx}
                         src={optionMedia.value}
-                        alt={`Sual ${question.questionNumber ?? ""} variant ${option.label} şəkli`}
-                        loading="lazy"
-                        style={{ maxWidth: "100%", maxHeight: 200, borderRadius: 6, cursor: "zoom-in" }}
-                        onClick={() => window.open(optionMedia.value, "_blank")}
+                        alt={`Sual ${question.questionNumber ?? ""} şəkli`}
+                        compact
                       />
-                    </div>
+                    ) : (
+                      <pre key={idx} className="caption">{optionMedia.value}</pre>
+                    ),
                   )}
                 </div>
               </div>
@@ -51,7 +55,6 @@ export default function QuestionCard({ question, compact = false }: Props) {
           })}
         </div>
       )}
-      {question.media?.map((media, index) => <QuestionMediaBlock media={media} questionNumber={question.questionNumber} key={`${media.kind}-${index}`} />)}
       {!compact && question.reviewNote && <p className="review-status-note">{question.reviewNote}</p>}
       <div className="question-source">
         <span>{question.sourceTitle || question.sourceFilename || "Mənbə göstərilməyib"}</span>

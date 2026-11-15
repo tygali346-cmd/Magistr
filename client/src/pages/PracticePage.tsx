@@ -3,7 +3,7 @@ import { ArrowLeft, ArrowRight, BadgeCheck, Check, CircleHelp, FileQuestion, Rot
 import { Link, useRoute } from "wouter";
 import AppShell from "@/components/AppShell";
 import ExpandableText from "@/components/ExpandableText";
-import QuestionMediaBlock from "@/components/QuestionMediaBlock";
+import QuestionMediaBlock, { ZoomableMediaImage, isMediaImage } from "@/components/QuestionMediaBlock";
 import { trpc } from "@/lib/trpc";
 import { useFirebase } from "@/contexts/FirebaseContext";
 import { errorMessage, getLearnerKey, type QuestionRecord, type TopicRecord } from "@/lib/study";
@@ -143,21 +143,25 @@ export default function PracticePage() {
             {current.media?.map((media, index) => <QuestionMediaBlock media={media} questionNumber={current.questionNumber} key={`${media.kind}-${index}`} />)}
             <div className="quiz-options">
               {current.options.map(option => {
-                const optionMedia = current.media?.find(m => m.role === "option" && m.optionLabel === option.label);
+                const optionMedias = (current.media ?? []).filter(
+                  m => m.role === "option" && m.optionLabel?.toLowerCase() === option.label.toLowerCase(),
+                );
                 return (
                   <button type="button" key={option.id} className={`quiz-option${answers[current.id] === option.label ? " selected" : ""}`} onClick={() => setAnswers(previous => ({ ...previous, [current.id]: option.label }))} aria-pressed={answers[current.id] === option.label}>
                     <span className="quiz-option-mark">{option.label}</span>
-                    <div style={{ flex: 1, textAlign: "left" }}>
-                      <span>{option.optionText}</span>
-                      {optionMedia && (
-                        <div style={{ marginTop: 6 }}>
-                          <img
+                    <div style={{ flex: 1, textAlign: "left", minWidth: 0 }}>
+                      {option.optionText && <span>{option.optionText}</span>}
+                      {optionMedias.map((optionMedia, idx) =>
+                        isMediaImage(optionMedia) ? (
+                          <ZoomableMediaImage
+                            key={idx}
                             src={optionMedia.value}
-                            alt={`Sual ${current.questionNumber ?? ""} variant ${option.label} şəkli`}
-                            loading="lazy"
-                            style={{ maxWidth: "100%", maxHeight: 180, borderRadius: 6 }}
+                            alt={`Sual ${current.questionNumber ?? ""} şəkli`}
+                            compact
                           />
-                        </div>
+                        ) : (
+                          <pre key={idx} className="caption">{optionMedia.value}</pre>
+                        ),
                       )}
                     </div>
                   </button>
@@ -177,7 +181,32 @@ export default function PracticePage() {
           <div className="result-stats"><div className="result-stat good"><strong>{result.correctCount}</strong><span>Düzgün</span></div><div className="result-stat bad"><strong>{result.incorrectCount}</strong><span>Səhv</span></div><div className="result-stat neutral"><strong>{result.unscoredCount}</strong><span>Yoxlanılmamış</span></div></div>
           {wrong.length > 0 ? <><div className="section-title-row"><div><h3>Səhv cavablar</h3><p>Yenidən nəzərdən keçirin</p></div></div><div className="review-stack">{wrong.map(question => {
             const answer = resultByQuestion.get(question.id);
-            return <div className="card review-card" key={question.id}><div className="question-tags"><span className="question-number">Sual {question.questionNumber}</span><span className="tag warning"><X size={12} /> Səhv</span></div><ExpandableText text={question.originalText} /><p className="caption">Seçiminiz: {answer?.selectedOption ?? "Cavab seçilməyib"} · Təsdiqlənmiş cavab: {answer?.verifiedCorrectOption ?? "—"}</p></div>;
+            const optionMedias = (question.media ?? []).filter(m => m.role === "option");
+            return (
+              <div className="card review-card" key={question.id}>
+                <div className="question-tags"><span className="question-number">Sual {question.questionNumber}</span><span className="tag warning"><X size={12} /> Səhv</span></div>
+                <ExpandableText text={question.originalText} />
+                {question.media?.map((media, index) => <QuestionMediaBlock media={media} questionNumber={question.questionNumber} key={`${media.kind}-${index}`} />)}
+                {optionMedias.length > 0 && (
+                  <div className="question-options" style={{ marginBottom: 10 }}>
+                    {question.options.map(option => {
+                      const matched = optionMedias.filter(m => m.optionLabel?.toLowerCase() === option.label.toLowerCase());
+                      if (!matched.length) return null;
+                      return (
+                        <div className="option-line" key={option.id}>
+                          <span className="option-line-label">{option.label}</span>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            {option.optionText && <span>{option.optionText}</span>}
+                            {matched.map((m, idx) => isMediaImage(m) ? <ZoomableMediaImage key={idx} src={m.value} alt={`Sual ${question.questionNumber ?? ""} şəkli`} compact /> : <pre key={idx} className="caption">{m.value}</pre>)}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+                <p className="caption">Seçiminiz: {answer?.selectedOption ?? "Cavab seçilməyib"} · Təsdiqlənmiş cavab: {answer?.verifiedCorrectOption ?? "—"}</p>
+              </div>
+            );
           })}</div></> : <div className="notice-box">Yoxlanmış suallar arasında səhv cavab yoxdur.</div>}
           <p className="caption" style={{ marginTop: 14 }}>
             {firebaseUser?.emailVerified

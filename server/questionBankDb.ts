@@ -273,6 +273,15 @@ export async function saveQuestionReview(input: {
   return true;
 }
 
+export async function updateQuestionMedia(questionId: number, media: import("../drizzle/schema").QuestionMedia[] | null) {
+  const db = await getDb();
+  if (!db) return memoryStore.updateQuestionMedia(questionId, media);
+  const [current] = await db.select({ id: questions.id }).from(questions).where(eq(questions.id, questionId)).limit(1);
+  if (!current) return false;
+  await db.update(questions).set({ media: media && media.length ? media : null }).where(eq(questions.id, questionId));
+  return true;
+}
+
 export async function getLearnerAttempts(learnerKey: string, limit = 50) {
   const db = await getDb();
   if (!db) return memoryStore.getLearnerAttempts(learnerKey, limit);

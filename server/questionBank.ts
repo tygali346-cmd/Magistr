@@ -11,7 +11,8 @@ import { storageGetObject, storagePut } from "./storage";
 import { hasExactQuestionSet } from "./practiceSessionLogic";
 import { getDb } from "./db";
 import { memoryStore } from "./memoryStore";
-import { renderAndCropPdfFigure } from "./pdfProcessor";
+import { commitFirestoreBatch, deleteFirestoreDoc } from "./firestoreRest";
+import { cropAndStorePageFigure, createPdfPageRenderer, renderAndCropPdfFigure, renderPdfPagePng, type PdfPageRenderer } from "./pdfProcessor";
 import { buildExamFileWrite, buildQuestionWrite, syncAllToFirestore, syncExamFileToFirestore, syncQuestionToFirestore } from "./firestoreSync";
 import {
   ensureTopicCatalog,
@@ -27,6 +28,7 @@ import {
   listTopics,
   saveQuestionReview,
   updateExamFileState,
+  updateQuestionMedia,
 } from "./questionBankDb";
 
 const REVIEW_THRESHOLD = 0.75;
@@ -346,6 +348,118 @@ type PersistProgressStats = {
   needsReview: number;
 };
 
+async function buildQuestionMediaEntries(
+  item: ImportQuestion,
+  sourceFingerprint: string,
+  rendererRef: { current: PdfPageRenderer | null },
+  pdfBytes?: Buffer,
+): Promise<{ media: QuestionMedia[]; warnings: string[] }> {
+  const figList: Array<{
+    kind: QuestionMedia["kind"];
+    label: string | null;
+    value: string;
+    page: number | null;
+    bbox: { x: number; y: number; w: number; h: number } | null;
+    role: "question" | "option";
+    optionLabel: string | null;
+    fromFigures: boolean;
+  }> = [
+    ...(item.figures || []).map(f => ({
+      kind: f.kind,
+      label: f.label,
+      value: f.value || "",
+      page: f.page,
+      bbox: f.bbox,
+      role: f.role,
+      optionLabel: f.optionLabel,
+      fromFigures: true,
+    })),
+    ...(item.media || []).map(m => ({
+      kind: m.kind,
+      label: m.label,
+      value: m.value,
+      page: m.sourcePage,
+      bbox: null,
+      role: "question" as const,
+      optionLabel: null,
+      fromFigures: false,
+    })),
+  ];
+
+  const hasAnyVisualCandidate = figList.some(
+    entry => entry.fromFigures || entry.kind === "image" || entry.kind === "diagram",
+  );
+  if (item.hasFigure && !hasAnyVisualCandidate) {
+    figList.unshift({
+      kind: "image",
+      label: "Sual şəkli",
+      value: "",
+      page: item.sourcePage ?? 1,
+      bbox: null,
+      role: "question",
+      optionLabel: null,
+      fromFigures: true,
+    });
+  }
+
+  const mediaEntries: QuestionMedia[] = [];
+  const warnings: string[] = [];
+  const storageKeyPrefix = sha256(sourceFingerprint).slice(0, 20);
+
+  for (const [figIndex, entry] of figList.entries()) {
+    const shouldCropFromPdf =
+      Boolean(pdfBytes) &&
+      (entry.fromFigures || entry.kind === "image" || entry.kind === "diagram" || (!entry.value.trim() && entry.kind === "table"));
+
+    let mediaVal = entry.value || "";
+    let storageKey: string | undefined;
+    const pageNum = entry.page ?? item.sourcePage ?? 1;
+
+    if (shouldCropFromPdf && pdfBytes) {
+      try {
+        if (!rendererRef.current) {
+          rendererRef.current = await createPdfPageRenderer(pdfBytes);
+        }
+        const { canvas, pageNumber: targetPageNum } = await rendererRef.current.renderPage(pageNum);
+        const cropped = await cropAndStorePageFigure(
+          canvas,
+          targetPageNum,
+          entry.bbox,
+          storageKeyPrefix,
+          figIndex,
+          storagePut,
+        );
+        mediaVal = cropped.url;
+        storageKey = cropped.storageKey;
+        if (cropped.needsReview) {
+          warnings.push(cropped.reviewNote ?? "şəkil kəsimi yoxlanmalıdır");
+        }
+      } catch {
+        warnings.push("şəkil kəsimi yoxlanmalıdır");
+      }
+    } else if (entry.fromFigures && !mediaVal) {
+      warnings.push("şəkil kəsimi yoxlanmalıdır");
+    }
+
+    if (entry.role === "option" && !entry.optionLabel?.trim()) {
+      warnings.push("şəkil kəsimi yoxlanmalıdır");
+    }
+
+    mediaEntries.push({
+      kind: entry.kind,
+      ...(entry.label ? { label: entry.label } : {}),
+      value: mediaVal,
+      ...(storageKey ? { storageKey } : {}),
+      ...(pageNum ? { sourcePage: pageNum } : {}),
+      ...(entry.bbox ? { bbox: entry.bbox } : {}),
+      ...(entry.role ? { role: entry.role } : {}),
+      ...(entry.optionLabel ? { optionLabel: entry.optionLabel } : {}),
+    });
+  }
+
+  return { media: mediaEntries, warnings: [...new Set(warnings)] };
+}
+
 async function persistExtractedQuestions(
   examFileId: number,
   fileSha: string,
@@ -361,74 +475,99 @@ async function persistExtractedQuestions(
   let needsReview = 0;
   const total = imported.length;
   const fingerprints = planSourceFingerprints(fileSha, fileYears, imported);
-  for (const [index, item] of imported.entries()) {
-    const subjectSlug = item.subjectSlug as SubjectSlug | null;
-    const subject = subjectSlug ? await getSubjectBySlug(subjectSlug) : null;
-    const resolvedTopic = resolveModelTopic(item);
-    const mainTopic = resolvedTopic.primarySlug ? await getTopicBySlug(resolvedTopic.primarySlug) : null;
-    const subtopic = resolvedTopic.subtopicSlug ? await getTopicBySlug(resolvedTopic.subtopicSlug) : null;
-    const yearMismatch = item.examYear !== null && fileYears.length > 0 && !fileYears.includes(item.examYear);
-    const { year, sourceFingerprint, collision } = fingerprints[index];
-    const itemWarnings = [...extractionWarnings, ...(yearMismatch ? [`AI tərəfindən təyin edilən ${item.examYear} ili PDF üçün verilmiş il göstəricisinə (${fileYears.join(", ")}) uyğun gəlmir.`] : [])];
-    const questionText = item.questionText.trim();
-    const options = item.options.map(option => ({ label: option.label.trim(), text: option.text.trim() })).filter(option => option.label && option.text);
-    const contentFingerprint = sha256([questionText, ...options.map(option => `${option.label}:${option.text}`)].map(normalize).join("\n") || `empty-${fileSha}-${index}`);
+  const rendererRef: { current: PdfPageRenderer | null } = { current: null };
 
-    const figList = [
-      ...(item.figures || []),
-      ...(item.media || []).map(m => ({ ...m, bbox: null, role: "question" as const, optionLabel: null }))
-    ];
-    const mediaEntries: QuestionMedia[] = [];
-    for (const [figIndex, entry] of figList.entries()) {
-      let mediaVal = entry.value || "";
-      let storageKey: string | undefined = (entry as any).storageKey;
-      let needsReviewFlag = false;
-      let reviewNoteAdd = "";
+  try {
+    for (const [index, item] of imported.entries()) {
+      const subjectSlug = item.subjectSlug as SubjectSlug | null;
+      const subject = subjectSlug ? await getSubjectBySlug(subjectSlug) : null;
+      const resolvedTopic = resolveModelTopic(item);
+      const mainTopic = resolvedTopic.primarySlug ? await getTopicBySlug(resolvedTopic.primarySlug) : null;
+      const subtopic = resolvedTopic.subtopicSlug ? await getTopicBySlug(resolvedTopic.subtopicSlug) : null;
+      const yearMismatch = item.examYear !== null && fileYears.length > 0 && !fileYears.includes(item.examYear);
+      const { year, sourceFingerprint, collision } = fingerprints[index];
+      const itemWarnings = [...extractionWarnings, ...(yearMismatch ? [`AI tərəfindən təyin edilən ${item.examYear} ili PDF üçün verilmiş il göstəricisinə (${fileYears.join(", ")}) uyğun gəlmir.`] : [])];
+      const questionText = item.questionText.trim();
+      const options = item.options.map(option => ({ label: option.label.trim(), text: option.text.trim() })).filter(option => option.label && option.text);
+      const contentFingerprint = sha256([questionText, ...options.map(option => `${option.label}:${option.text}`)].map(normalize).join("\n") || `empty-${fileSha}-${index}`);
 
-      if (pdfBytes && (entry.kind === "image" || entry.kind === "diagram" || entry.kind === "table" || (entry as any).bbox)) {
-        try {
-          const cropped = await renderAndCropPdfFigure(
-            pdfBytes,
-            (entry as any).page ?? item.sourcePage ?? 1,
-            (entry as any).bbox ?? null,
-            fileSha,
-            index * 20 + figIndex,
-            storagePut
-          );
-          mediaVal = cropped.url;
-          storageKey = cropped.storageKey;
-          if (cropped.needsReview) {
-            needsReviewFlag = true;
-            reviewNoteAdd = cropped.reviewNote ?? "şəkil kəsimi yoxlanmalıdır";
-          }
-        } catch (err) {
-          needsReviewFlag = true;
-          reviewNoteAdd = "şəkil kəsimi zamanı xəta baş verdi";
+      if (!db) {
+        if (memoryStore.questions.some(q => q.sourceFingerprint === sourceFingerprint)) {
+          skippedDuplicates += 1;
+          await onItemProcessed?.({ processed: index + 1, total, inserted, skippedDuplicates, needsReview });
+          continue;
         }
+        const builtMedia = await buildQuestionMediaEntries(item, sourceFingerprint, rendererRef, pdfBytes);
+        itemWarnings.push(...builtMedia.warnings);
+        const sameContent = memoryStore.questions.find(q => q.contentFingerprint === contentFingerprint);
+        const reviewReasons = [
+          item.reviewNote.trim(),
+          ...itemWarnings,
+          !questionText ? "Sual mətni boşdur." : "",
+          !subject ? "Fənn müəyyən edilməyib." : "",
+          !mainTopic ? "Əsas mövzu müəyyən edilməyib." : "",
+          item.confidence < REVIEW_THRESHOLD ? "Təsnifat əminliyi aşağıdır." : "",
+          !year ? "İmtahan ili müəyyən edilməyib." : "",
+          !item.questionNumber ? "Sual nömrəsi müəyyən edilməyib." : "",
+          !options.length ? "Cavab variantı yoxdur." : "",
+          sameContent ? `Mümkün təkrar: ${sameContent.id}` : "",
+          item.subtopicNumber && !subtopic ? "Alt mövzu kataloqda tapılmadı." : "",
+          collision ? "il/nömrə toqquşması" : "",
+        ].filter(Boolean);
+        const uncertain = reviewReasons.length > 0;
+        const reviewNote = reviewReasons.join(" · ").slice(0, 2000) || null;
+        const media = builtMedia.media;
+        const labels = new Set<string>();
+        const finalOptions = options.map((option, optionIndex) => {
+          let label = option.label;
+          if (labels.has(label)) label = `${label}_${optionIndex + 1}`;
+          labels.add(label);
+          return { label, optionText: option.text, sortOrder: optionIndex + 1 };
+        });
+        const now = new Date();
+        const questionId = memoryStore.nextIds.question++;
+        memoryStore.questions.push({
+          id: questionId,
+          subjectId: subject?.id ?? null,
+          topicId: mainTopic?.id ?? null,
+          subtopicId: subtopic?.id ?? null,
+          examFileId,
+          examYear: year,
+          questionNumber: item.questionNumber,
+          originalText: questionText || "Mətn oxunmayıb — mənbə PDF səhifəsinə baxın.",
+          correctionSuggestion: item.correctionSuggestion?.trim() || null,
+          correctOption: null,
+          correctAnswerSource: null,
+          media: media.length ? media : null,
+          sourcePage: item.sourcePage,
+          classificationConfidence: item.confidence,
+          classificationReason: item.classificationReason.trim() || null,
+          reviewStatus: uncertain ? "needs_review" : "checked",
+          reviewNote,
+          sourceFingerprint,
+          contentFingerprint,
+          createdAt: now,
+          updatedAt: now,
+        });
+        for (const option of finalOptions) {
+          memoryStore.questionOptions.push({ id: memoryStore.nextIds.option++, questionId, ...option });
+        }
+        inserted += 1;
+        if (uncertain) needsReview += 1;
+        memoryStore.saveSnapshot();
+        await onItemProcessed?.({ processed: index + 1, total, inserted, skippedDuplicates, needsReview });
+        continue;
       }
 
-      mediaEntries.push({
-        kind: entry.kind,
-        ...(entry.label ? { label: entry.label } : {}),
-        value: mediaVal,
-        ...(storageKey ? { storageKey } : {}),
-        ...((entry as any).page ?? item.sourcePage ? { sourcePage: (entry as any).page ?? item.sourcePage! } : {}),
-        ...((entry as any).bbox ? { bbox: (entry as any).bbox } : {}),
-        ...((entry as any).role ? { role: (entry as any).role } : {}),
-        ...((entry as any).optionLabel ? { optionLabel: (entry as any).optionLabel } : {}),
-      });
-      if (needsReviewFlag && reviewNoteAdd) {
-        itemWarnings.push(reviewNoteAdd);
-      }
-    }
-
-    if (!db) {
-      if (memoryStore.questions.some(q => q.sourceFingerprint === sourceFingerprint)) {
+      const [sameSource] = await db.select({ id: questions.id }).from(questions).where(eq(questions.sourceFingerprint, sourceFingerprint)).limit(1);
+      if (sameSource) {
         skippedDuplicates += 1;
         await onItemProcessed?.({ processed: index + 1, total, inserted, skippedDuplicates, needsReview });
         continue;
       }
-      const sameContent = memoryStore.questions.find(q => q.contentFingerprint === contentFingerprint);
+      const builtMedia = await buildQuestionMediaEntries(item, sourceFingerprint, rendererRef, pdfBytes);
+      itemWarnings.push(...builtMedia.warnings);
+      const [sameContent] = await db.select({ id: questions.id }).from(questions).where(eq(questions.contentFingerprint, contentFingerprint)).limit(1);
       const reviewReasons = [
         item.reviewNote.trim(),
         ...itemWarnings,
@@ -445,7 +584,7 @@ async function persistExtractedQuestions(
       ].filter(Boolean);
       const uncertain = reviewReasons.length > 0;
       const reviewNote = reviewReasons.join(" · ").slice(0, 2000) || null;
-      const media = mediaEntries;
+      const media = builtMedia.media;
       const labels = new Set<string>();
       const finalOptions = options.map((option, optionIndex) => {
         let label = option.label;
@@ -453,102 +592,39 @@ async function persistExtractedQuestions(
         labels.add(label);
         return { label, optionText: option.text, sortOrder: optionIndex + 1 };
       });
-      const now = new Date();
-      const questionId = memoryStore.nextIds.question++;
-      memoryStore.questions.push({
-        id: questionId,
-        subjectId: subject?.id ?? null,
-        topicId: mainTopic?.id ?? null,
-        subtopicId: subtopic?.id ?? null,
-        examFileId,
-        examYear: year,
-        questionNumber: item.questionNumber,
-        originalText: questionText || "Mətn oxunmayıb — mənbə PDF səhifəsinə baxın.",
-        correctionSuggestion: item.correctionSuggestion?.trim() || null,
-        correctOption: null,
-        correctAnswerSource: null,
-        media: media.length ? media : null,
-        sourcePage: item.sourcePage,
-        classificationConfidence: item.confidence,
-        classificationReason: item.classificationReason.trim() || null,
-        reviewStatus: uncertain ? "needs_review" : "checked",
-        reviewNote,
-        sourceFingerprint,
-        contentFingerprint,
-        createdAt: now,
-        updatedAt: now,
+      await db.transaction(async tx => {
+        await tx.insert(questions).values({
+          subjectId: subject?.id ?? null,
+          topicId: mainTopic?.id ?? null,
+          subtopicId: subtopic?.id ?? null,
+          examFileId,
+          examYear: year,
+          questionNumber: item.questionNumber,
+          originalText: questionText || "Mətn oxunmayıb — mənbə PDF səhifəsinə baxın.",
+          correctionSuggestion: item.correctionSuggestion?.trim() || null,
+          correctOption: null,
+          correctAnswerSource: null,
+          media: media.length ? media : null,
+          sourcePage: item.sourcePage,
+          classificationConfidence: item.confidence,
+          classificationReason: item.classificationReason.trim() || null,
+          reviewStatus: uncertain ? "needs_review" : "checked",
+          reviewNote,
+          sourceFingerprint,
+          contentFingerprint,
+        });
+        const [created] = await tx.select({ id: questions.id }).from(questions).where(eq(questions.sourceFingerprint, sourceFingerprint)).limit(1);
+        if (!created) throw new Error("Sual qeydi bazada tapılmadı.");
+        if (finalOptions.length) await tx.insert(questionOptions).values(finalOptions.map(option => ({ ...option, questionId: created.id })));
       });
-      for (const option of finalOptions) {
-        memoryStore.questionOptions.push({ id: memoryStore.nextIds.option++, questionId, ...option });
-      }
       inserted += 1;
       if (uncertain) needsReview += 1;
-      memoryStore.saveSnapshot();
       await onItemProcessed?.({ processed: index + 1, total, inserted, skippedDuplicates, needsReview });
-      continue;
     }
-
-    const [sameSource] = await db.select({ id: questions.id }).from(questions).where(eq(questions.sourceFingerprint, sourceFingerprint)).limit(1);
-    if (sameSource) {
-      skippedDuplicates += 1;
-      await onItemProcessed?.({ processed: index + 1, total, inserted, skippedDuplicates, needsReview });
-      continue;
-    }
-    const [sameContent] = await db.select({ id: questions.id }).from(questions).where(eq(questions.contentFingerprint, contentFingerprint)).limit(1);
-    const reviewReasons = [
-      item.reviewNote.trim(),
-      ...itemWarnings,
-      !questionText ? "Sual mətni boşdur." : "",
-      !subject ? "Fənn müəyyən edilməyib." : "",
-      !mainTopic ? "Əsas mövzu müəyyən edilməyib." : "",
-      item.confidence < REVIEW_THRESHOLD ? "Təsnifat əminliyi aşağıdır." : "",
-      !year ? "İmtahan ili müəyyən edilməyib." : "",
-      !item.questionNumber ? "Sual nömrəsi müəyyən edilməyib." : "",
-      !options.length ? "Cavab variantı yoxdur." : "",
-      sameContent ? `Mümkün təkrar: ${sameContent.id}` : "",
-      item.subtopicNumber && !subtopic ? "Alt mövzu kataloqda tapılmadı." : "",
-      collision ? "il/nömrə toqquşması" : "",
-    ].filter(Boolean);
-    const uncertain = reviewReasons.length > 0;
-    const reviewNote = reviewReasons.join(" · ").slice(0, 2000) || null;
-    const media = mediaEntries;
-    const labels = new Set<string>();
-    const finalOptions = options.map((option, optionIndex) => {
-      let label = option.label;
-      if (labels.has(label)) label = `${label}_${optionIndex + 1}`;
-      labels.add(label);
-      return { label, optionText: option.text, sortOrder: optionIndex + 1 };
-    });
-    await db.transaction(async tx => {
-      await tx.insert(questions).values({
-        subjectId: subject?.id ?? null,
-        topicId: mainTopic?.id ?? null,
-        subtopicId: subtopic?.id ?? null,
-        examFileId,
-        examYear: year,
-        questionNumber: item.questionNumber,
-        originalText: questionText || "Mətn oxunmayıb — mənbə PDF səhifəsinə baxın.",
-        correctionSuggestion: item.correctionSuggestion?.trim() || null,
-        correctOption: null,
-        correctAnswerSource: null,
-        media: media.length ? media : null,
-        sourcePage: item.sourcePage,
-        classificationConfidence: item.confidence,
-        classificationReason: item.classificationReason.trim() || null,
-        reviewStatus: uncertain ? "needs_review" : "checked",
-        reviewNote,
-        sourceFingerprint,
-        contentFingerprint,
-      });
-      const [created] = await tx.select({ id: questions.id }).from(questions).where(eq(questions.sourceFingerprint, sourceFingerprint)).limit(1);
-      if (!created) throw new Error("Sual qeydi bazada tapılmadı.");
-      if (finalOptions.length) await tx.insert(questionOptions).values(finalOptions.map(option => ({ ...option, questionId: created.id })));
-    });
-    inserted += 1;
-    if (uncertain) needsReview += 1;
-    await onItemProcessed?.({ processed: index + 1, total, inserted, skippedDuplicates, needsReview });
+    return { inserted, skippedDuplicates, needsReview };
+  } finally {
+    await rendererRef.current?.destroy().catch(() => {});
   }
-  return { inserted, skippedDuplicates, needsReview };
 }
 
 export type LiveImportStage =
@@ -1009,6 +1085,108 @@ export const questionBankRouter = router({
     }
     return { success };
   }),
+  recropQuestionMedia: adminProcedure.input(z.object({
+    questionId: z.number().int().positive(),
+    mediaIndex: z.number().int().min(-1).max(19),
+    pageNumber: z.number().int().positive().max(1000),
+    bbox: z.object({
+      x: z.number().min(0).max(1),
+      y: z.number().min(0).max(1),
+      w: z.number().min(0.021).max(1),
+      h: z.number().min(0.021).max(1),
+    }).strict(),
+    role: z.enum(["question", "option"]).optional(),
+    optionLabel: z.string().max(8).nullable().optional(),
+  })).mutation(async ({ input, ctx }) => {
+    const current = await getQuestion(input.questionId);
+    if (!current) throw new TRPCError({ code: "NOT_FOUND", message: "Sual tapılmadı." });
+    const file = await getExamFileById(current.examFileId);
+    if (!file || file.mimeType !== "application/pdf") throw new TRPCError({ code: "BAD_REQUEST", message: "Bu sual üçün PDF mənbəyi tapılmadı." });
+    const storedPdf = await storageGetObject(file.storageKey);
+    if (!storedPdf) throw new TRPCError({ code: "NOT_FOUND", message: "Orijinal PDF faylı saxlamada tapılmadı." });
+    const existingMedia = [...(current.media ?? [])];
+    const targetIdx = input.mediaIndex >= 0 && input.mediaIndex < existingMedia.length ? input.mediaIndex : existingMedia.length;
+    const prefix = sha256(current.sourceFingerprint).slice(0, 20);
+    const cropped = await renderAndCropPdfFigure(storedPdf.bytes, input.pageNumber, input.bbox, prefix, targetIdx, storagePut);
+    if (cropped.needsReview) {
+      throw new TRPCError({ code: "BAD_REQUEST", message: "Seçilmiş kəsim qutusu etibarsızdır və ya çox kiçikdir." });
+    }
+    const prev = existingMedia[targetIdx];
+    const nextEntry: QuestionMedia = {
+      kind: prev?.kind ?? "image",
+      label: prev?.label ?? (input.role === "option" && input.optionLabel ? `Variant ${input.optionLabel}` : "Sual şəkli"),
+      value: `${cropped.url}?v=${Date.now()}`,
+      storageKey: cropped.storageKey,
+      sourcePage: input.pageNumber,
+      bbox: input.bbox,
+      role: input.role ?? prev?.role ?? "question",
+      ...(input.optionLabel !== undefined ? (input.optionLabel ? { optionLabel: input.optionLabel } : {}) : (prev?.optionLabel ? { optionLabel: prev.optionLabel } : {})),
+    };
+    if (targetIdx < existingMedia.length) existingMedia[targetIdx] = nextEntry;
+    else existingMedia.push(nextEntry);
+    await updateQuestionMedia(current.id, existingMedia);
+    if (ctx.firebaseIdToken && ctx.user) {
+      await syncQuestionToFirestore(current.id, ctx.firebaseIdToken, ctx.user.openId);
+    }
+    return { media: existingMedia };
+  }),
+  replaceQuestionMedia: adminProcedure.input(z.object({
+    questionId: z.number().int().positive(),
+    mediaIndex: z.number().int().min(-1).max(19),
+    dataUrl: z.string().max(8 * 1024 * 1024),
+    role: z.enum(["question", "option"]).default("question"),
+    optionLabel: z.string().max(8).nullable().optional(),
+    label: z.string().max(120).nullable().optional(),
+  })).mutation(async ({ input, ctx }) => {
+    const current = await getQuestion(input.questionId);
+    if (!current) throw new TRPCError({ code: "NOT_FOUND", message: "Sual tapılmadı." });
+    const match = /^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/=]+)$/.exec(input.dataUrl.trim());
+    if (!match) throw new TRPCError({ code: "BAD_REQUEST", message: "Yalnız PNG, JPEG və ya WebP şəkli yükləmək olar." });
+    const mimeType = match[1];
+    const bytes = Buffer.from(match[2], "base64");
+    if (bytes.byteLength < 16 || bytes.byteLength > 5 * 1024 * 1024) {
+      throw new TRPCError({ code: "BAD_REQUEST", message: "Şəkil ölçüsü 5 MB-dan çox ola bilməz." });
+    }
+    const ext = mimeType === "image/png" ? "png" : mimeType === "image/webp" ? "webp" : "jpg";
+    const existingMedia = [...(current.media ?? [])];
+    const targetIdx = input.mediaIndex >= 0 && input.mediaIndex < existingMedia.length ? input.mediaIndex : existingMedia.length;
+    const prefix = sha256(current.sourceFingerprint).slice(0, 20);
+    const stored = await storagePut(`qebulfit/media/${prefix}-custom-${targetIdx}.${ext}`, bytes, mimeType);
+    const prev = existingMedia[targetIdx];
+    const nextEntry: QuestionMedia = {
+      kind: "image",
+      label: input.label?.trim() || prev?.label || (input.role === "option" && input.optionLabel ? `Variant ${input.optionLabel}` : "Sual şəkli"),
+      value: stored.url,
+      storageKey: stored.key,
+      ...(current.sourcePage ? { sourcePage: current.sourcePage } : {}),
+      role: input.role,
+      ...(input.role === "option" && input.optionLabel ? { optionLabel: input.optionLabel } : {}),
+    };
+    if (targetIdx < existingMedia.length) existingMedia[targetIdx] = nextEntry;
+    else existingMedia.push(nextEntry);
+    await updateQuestionMedia(current.id, existingMedia);
+    if (ctx.firebaseIdToken && ctx.user) {
+      await syncQuestionToFirestore(current.id, ctx.firebaseIdToken, ctx.user.openId);
+    }
+    return { media: existingMedia };
+  }),
+  deleteQuestionMedia: adminProcedure.input(z.object({
+    questionId: z.number().int().positive(),
+    mediaIndex: z.number().int().min(0).max(19),
+  })).mutation(async ({ input, ctx }) => {
+    const current = await getQuestion(input.questionId);
+    if (!current) throw new TRPCError({ code: "NOT_FOUND", message: "Sual tapılmadı." });
+    const existingMedia = [...(current.media ?? [])];
+    if (input.mediaIndex >= existingMedia.length) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "Şəkil qeydi tapılmadı." });
+    }
+    existingMedia.splice(input.mediaIndex, 1);
+    await updateQuestionMedia(current.id, existingMedia.length ? existingMedia : null);
+    if (ctx.firebaseIdToken && ctx.user) {
+      await syncQuestionToFirestore(current.id, ctx.firebaseIdToken, ctx.user.openId);
+    }
+    return { media: existingMedia };
+  }),
   importProgress: adminProcedure
     .input(z.object({ examFileIds: z.array(z.number().int().positive()).max(50).optional() }).optional())
     .query(async ({ input }) => {
@@ -1411,4 +1589,12 @@ export async function handlePdfUploadRequest(fileBytes: Buffer, filename: string
   return storeUploadedPdf(fileBytes, filename, requestedYears, expectedQuestionCount);
 }
 
-export { ensureTopicCatalog };
+export async function renderExamFilePagePng(examFileId: number, pageNumber: number) {
+  const file = await getExamFileById(examFileId);
+  if (!file || file.mimeType !== "application/pdf") return null;
+  const stored = await storageGetObject(file.storageKey);
+  if (!stored) return null;
+  return renderPdfPagePng(stored.bytes, pageNumber);
+}
+
+export { ensureTopicCatalog, importQuestionSchema, persistExtractedQuestions };

@@ -79,8 +79,10 @@ export async function storagePut(
   relKey: string,
   data: Buffer | Uint8Array | string,
   contentType = "application/octet-stream",
+  options?: { deterministic?: boolean },
 ): Promise<{ key: string; url: string }> {
-  const key = appendHashSuffix(normalizeKey(relKey));
+  const normalized = normalizeKey(relKey);
+  const key = options?.deterministic ? normalized : appendHashSuffix(normalized);
   const bytes = typeof data === "string" ? Buffer.from(data, "utf8") : Buffer.from(data);
   const s3Config = getS3Config();
 
@@ -98,6 +100,7 @@ export async function storagePut(
   }
 
   memoryStore.storageBlobs.set(key, { bytes, contentType });
+  memoryStore.saveSnapshot();
   try {
     const diskPath = resolveDiskPath(key);
     await fs.mkdir(path.dirname(diskPath), { recursive: true });
@@ -107,6 +110,15 @@ export async function storagePut(
   }
 
   return { key, url: `/api/storage/${key}` };
+}
+
+function inferContentType(key: string): string {
+  const lower = key.toLowerCase();
+  if (lower.endsWith(".pdf")) return "application/pdf";
+  if (lower.endsWith(".png")) return "image/png";
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+  if (lower.endsWith(".webp")) return "image/webp";
+  return "application/octet-stream";
 }
 
 export async function storageGetObject(
@@ -128,7 +140,7 @@ export async function storageGetObject(
       const bytes = Buffer.from(await result.Body.transformToByteArray());
       return {
         bytes,
-        contentType: result.ContentType || (key.toLowerCase().endsWith(".pdf") ? "application/pdf" : "application/octet-stream"),
+        contentType: result.ContentType || inferContentType(key),
       };
     } catch (error) {
       if ((error as { name?: string })?.name === "NoSuchKey") return null;
@@ -142,7 +154,7 @@ export async function storageGetObject(
   try {
     const diskPath = resolveDiskPath(key);
     const bytes = await fs.readFile(diskPath);
-    const contentType = key.toLowerCase().endsWith(".pdf") ? "application/pdf" : "application/octet-stream";
+    const contentType = inferContentType(key);
     memoryStore.storageBlobs.set(key, { bytes, contentType });
     return { bytes, contentType };
   } catch {

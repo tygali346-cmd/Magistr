@@ -21,9 +21,10 @@ import type {
 import type { QuestionFilters } from "./questionBankDb";
 
 const STORE_SNAPSHOT_PATH = path.resolve(process.cwd(), ".data", "qebulfit-store.json");
+const DEFAULT_SNAPSHOT_PATH = path.resolve(process.cwd(), "server", "defaultSnapshot.json");
 
 function isDiskPersistenceEnabled() {
-  return !process.env.VITEST && process.env.NODE_ENV !== "test";
+  return (!process.env.VITEST || process.env.FORCE_DISK_PERSISTENCE === "true") && process.env.NODE_ENV !== "test";
 }
 
 function reviveDates<T extends Record<string, unknown>>(row: T, dateFields: string[]): T {
@@ -451,6 +452,16 @@ class MemoryStore {
     return true;
   }
 
+  updateQuestionMedia(questionId: number, media: QuestionMedia[] | null) {
+    this.ensureInitialized();
+    const q = this.questions.find(item => item.id === questionId);
+    if (!q) return false;
+    q.media = media && media.length ? media : null;
+    q.updatedAt = new Date();
+    this.saveSnapshot();
+    return true;
+  }
+
   getLearnerAttempts(learnerKey: string, limit = 50) {
     this.ensureInitialized();
     const cap = Math.max(1, Math.min(limit, 100));
@@ -518,7 +529,14 @@ class MemoryStore {
   }
 
   private loadSnapshot(): boolean {
-    if (!isDiskPersistenceEnabled() || !existsSync(STORE_SNAPSHOT_PATH)) return false;
+    if (!isDiskPersistenceEnabled()) return false;
+    if (!existsSync(STORE_SNAPSHOT_PATH) && existsSync(DEFAULT_SNAPSHOT_PATH)) {
+      try {
+        mkdirSync(path.dirname(STORE_SNAPSHOT_PATH), { recursive: true });
+        writeFileSync(STORE_SNAPSHOT_PATH, readFileSync(DEFAULT_SNAPSHOT_PATH));
+      } catch {}
+    }
+    if (!existsSync(STORE_SNAPSHOT_PATH)) return false;
     try {
       const raw = JSON.parse(readFileSync(STORE_SNAPSHOT_PATH, "utf8")) as {
         nextIds?: MemoryStore["nextIds"];
@@ -533,6 +551,7 @@ class MemoryStore {
         importJobs?: Record<string, unknown>[];
         answerKeyFiles?: Array<Record<string, unknown> & { pdfBase64?: string }>;
         answerKeyEntries?: Record<string, unknown>[];
+        storageBlobs?: Array<{ key?: unknown; contentType?: unknown; base64?: unknown }>;
       };
       if (!raw.subjects?.length || !raw.topics?.length) return false;
       if (raw.nextIds) this.nextIds = { ...this.nextIds, ...raw.nextIds };
@@ -553,6 +572,24 @@ class MemoryStore {
         } as AnswerKeyFile;
       });
       this.answerKeyEntries = (raw.answerKeyEntries ?? []).map(e => reviveDates(e, ["createdAt", "updatedAt"])) as AnswerKeyEntry[];
+      if (Array.isArray(raw.storageBlobs)) {
+        this.storageBlobs.clear();
+        const storageRootDir = path.resolve(process.cwd(), process.env.STORAGE_DIR?.trim() || ".data/storage");
+        for (const item of raw.storageBlobs) {
+          if (item && typeof item.key === "string" && typeof item.base64 === "string") {
+            const bytes = Buffer.from(item.base64, "base64");
+            const contentType = typeof item.contentType === "string" ? item.contentType : "application/octet-stream";
+            this.storageBlobs.set(item.key, { bytes, contentType });
+            try {
+              const diskPath = path.resolve(storageRootDir, item.key);
+              if (diskPath.startsWith(`${storageRootDir}${path.sep}`)) {
+                mkdirSync(path.dirname(diskPath), { recursive: true });
+                writeFileSync(diskPath, bytes);
+              }
+            } catch {}
+          }
+        }
+      }
       return true;
     } catch {
       return false;
@@ -579,8 +616,18 @@ class MemoryStore {
           pdfBase64: Buffer.from(pdfBytes).toString("base64"),
         })),
         answerKeyEntries: this.answerKeyEntries,
+        storageBlobs: Array.from(this.storageBlobs.entries()).map(([key, blob]) => ({
+          key,
+          contentType: blob.contentType,
+          base64: Buffer.from(blob.bytes).toString("base64"),
+        })),
       };
-      writeFileSync(STORE_SNAPSHOT_PATH, JSON.stringify(payload), "utf8");
+      const jsonStr = JSON.stringify(payload);
+      writeFileSync(STORE_SNAPSHOT_PATH, jsonStr, "utf8");
+      try {
+        mkdirSync(path.dirname(DEFAULT_SNAPSHOT_PATH), { recursive: true });
+        writeFileSync(DEFAULT_SNAPSHOT_PATH, jsonStr, "utf8");
+      } catch {}
     } catch {
       // Non-fatal fallback
     }

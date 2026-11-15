@@ -14,7 +14,7 @@ import {
   sdk,
   verifyAdminPasscode,
 } from "./sdk";
-import { ensureTopicCatalog, handlePdfUploadRequest } from "../questionBank";
+import { ensureTopicCatalog, handlePdfUploadRequest, renderExamFilePagePng } from "../questionBank";
 import { getAnswerKeyPdfForAdmin, storeUploadedAnswerKeyPdf } from "../answerKeyImport";
 import { syncAnswerKeyFileToFirestore, syncExamFileToFirestore } from "../firestoreSync";
 import { storageGetObject } from "../storage";
@@ -75,6 +75,10 @@ async function startServer() {
 
   app.get("/api/storage/*", async (req, res) => {
     const key = decodeURIComponent(req.path.replace(/^\/api\/storage\//, ""));
+    if (!key.startsWith("qebulfit/media/") && !key.startsWith("qebulfit/exams/")) {
+      res.status(403).json({ error: "Bu fayl sahəsinə giriş qadağandır." });
+      return;
+    }
     try {
       const obj = await storageGetObject(key);
       if (!obj) {
@@ -166,6 +170,30 @@ async function startServer() {
       }).type("application/pdf").send(file.pdfBytes);
     } catch {
       res.status(500).json({ error: "Cavab açarı PDF-i oxunmadı." });
+    }
+  });
+
+  app.get("/api/admin/exam-files/:examFileId/pages/:pageNumber", requireAdminPdfUpload, async (req, res) => {
+    const examFileId = Number(req.params.examFileId);
+    const pageNumber = Number(req.params.pageNumber);
+    if (!Number.isSafeInteger(examFileId) || examFileId < 1 || !Number.isSafeInteger(pageNumber) || pageNumber < 1) {
+      res.status(400).json({ error: "Səhifə parametrləri etibarsızdır." });
+      return;
+    }
+    try {
+      const rendered = await renderExamFilePagePng(examFileId, pageNumber);
+      if (!rendered) {
+        res.status(404).json({ error: "PDF səhifəsi tapılmadı." });
+        return;
+      }
+      res.set({
+        "Cache-Control": "private, max-age=300",
+        "X-Content-Type-Options": "nosniff",
+        "X-Pdf-Page-Count": String(rendered.pageCount),
+        "X-Pdf-Page-Number": String(rendered.pageNumber),
+      }).type("image/png").send(rendered.png);
+    } catch {
+      res.status(500).json({ error: "PDF səhifəsi şəklə çevrilə bilmədi." });
     }
   });
 

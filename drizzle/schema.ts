@@ -89,6 +89,9 @@ export type QuestionMedia = {
   value: string;
   sourcePage?: number;
   storageKey?: string;
+  bbox?: { x: number; y: number; w: number; h: number } | null;
+  role?: "question" | "option";
+  optionLabel?: string | null;
 };
 
 export const questions = mysqlTable(
