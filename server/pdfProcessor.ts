@@ -1,5 +1,5 @@
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
-import { createCanvas, type Canvas } from "canvas";
+import { createCanvas, Image, type Canvas } from "canvas";
 
 export type NormalizedBbox = {
   x: number;
@@ -95,6 +95,31 @@ export async function createPdfPageRenderer(pdfBytes: Buffer): Promise<PdfPageRe
   };
 }
 
+export async function compressImageBufferToJpeg(inputBuffer: Buffer, maxDimension = 1200, quality = 0.85): Promise<{ bytes: Buffer; contentType: string }> {
+  try {
+    const img = new Image();
+    img.src = inputBuffer;
+    let w = img.width || 1200;
+    let h = img.height || 1600;
+    if (w > maxDimension || h > maxDimension) {
+      if (w > h) {
+        h = Math.round((h * maxDimension) / w);
+        w = maxDimension;
+      } else {
+        w = Math.round((w * maxDimension) / h);
+        h = maxDimension;
+      }
+    }
+    const canvas = createCanvas(w, h);
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(img, 0, 0, w, h);
+    const bytes = canvas.toBuffer("image/jpeg", { quality });
+    return { bytes, contentType: "image/jpeg" };
+  } catch {
+    return { bytes: inputBuffer, contentType: "image/png" };
+  }
+}
+
 export async function cropAndStorePageFigure(
   pageCanvas: Canvas,
   targetPageNum: number,
@@ -134,8 +159,10 @@ export async function cropAndStorePageFigure(
     reviewNote = "şəkil kəsimi yoxlanmalıdır";
   }
 
-  const storageKey = `qebulfit/media/${storageKeyPrefix}-p${targetPageNum}-f${figIndex}.png`;
-  const stored = await storagePutFn(storageKey, imageBuffer, "image/png", { deterministic: true });
+  const compressed = await compressImageBufferToJpeg(imageBuffer, 1200, 0.85);
+  const ext = compressed.contentType === "image/jpeg" ? "jpg" : "png";
+  const storageKey = `qebulfit/media/${storageKeyPrefix}-p${targetPageNum}-f${figIndex}.${ext}`;
+  const stored = await storagePutFn(storageKey, compressed.bytes, compressed.contentType, { deterministic: true });
   return { storageKey: stored.key, url: stored.url, needsReview, reviewNote };
 }
 

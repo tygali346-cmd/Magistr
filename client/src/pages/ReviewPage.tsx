@@ -42,6 +42,13 @@ export default function ReviewPage() {
       await highConfidenceCountQuery.refetch();
     },
   });
+  const recreateMediaMutation = trpc.questionBank.recreateAllMedia.useMutation({
+    onSuccess: async (data) => {
+      setBulkMessage(`Şəkillər yoxlanıldı: ${data.totalFigureQuestions} şəkilli sualdan ${data.successfullyRendered} sualın şəkli uğurla bərpa olundu.`);
+      await invalidateAll();
+    },
+    onError: error => setBulkMessage(errorMessage(error)),
+  });
 
   function approveHighConfidenceQuestions() {
     const expectedCount = highConfidenceCountQuery.data ?? 0;
@@ -67,6 +74,15 @@ export default function ReviewPage() {
           <CheckCheck size={15} /> {bulkApproveMutation.isPending ? "Təsdiqlənir…" : `95%+ sualları təsdiqlə (${highConfidenceCountQuery.data ?? 0})`}
         </button>
         {bulkMessage && <p className="review-bulk-message" role="status">{bulkMessage}</p>}
+      </section>
+      <section className="review-bulk-approve" style={{ marginTop: 10, background: "#f5f8f6" }}>
+        <div className="review-bulk-copy">
+          <strong>Şəkilli sualların bərpası və yoxlanması</strong>
+          <p>Mövcud şəkilli sualların şəkillərini mənbə PDF-dən yenidən kəsib bərpa edin və işlək vəziyyətdə olduğunu yoxlayın.</p>
+        </div>
+        <button className="btn btn-secondary" onClick={() => recreateMediaMutation.mutate()} disabled={recreateMediaMutation.isPending}>
+          <ImagePlus size={15} /> {recreateMediaMutation.isPending ? "Şəkillər yaradılır..." : "Şəkilləri yenidən yarat"}
+        </button>
       </section>
       <section className="filter-panel"><div className="filter-field wide"><label htmlFor="review-search">Axtar</label><input id="review-search" className="field" placeholder="Mətn, il və ya sual nömrəsi" value={search} onChange={event => setSearch(event.target.value)} /></div><span className="caption"><Filter size={13} style={{ display: "inline", verticalAlign: "-3px" }} /> İdxal zamanı əminlik aşağı olduqda sual bura düşür.</span></section>
       {(queueQuery.isLoading || subjectsQuery.isLoading || inforQuery.isLoading || logicQuery.isLoading) && <div className="loading-state">Yoxlanış qeydləri yüklənir…</div>}

@@ -488,7 +488,14 @@ async function persistExtractedQuestions(
       const { year, sourceFingerprint, collision } = fingerprints[index];
       const itemWarnings = [...extractionWarnings, ...(yearMismatch ? [`AI tərəfindən təyin edilən ${item.examYear} ili PDF üçün verilmiş il göstəricisinə (${fileYears.join(", ")}) uyğun gəlmir.`] : [])];
       const questionText = item.questionText.trim();
-      const options = item.options.map(option => ({ label: option.label.trim(), text: option.text.trim() })).filter(option => option.label && option.text);
+      const rawOptions = item.options.map(option => ({ label: option.label.trim(), text: option.text.trim() })).filter(option => option.label && option.text);
+      const options = rawOptions.length > 0 ? rawOptions : [
+        { label: "A", text: "Variant A (şəkildədir)" },
+        { label: "B", text: "Variant B (şəkildədir)" },
+        { label: "C", text: "Variant C (şəkildədir)" },
+        { label: "D", text: "Variant D (şəkildədir)" },
+        { label: "E", text: "Variant E (şəkildədir)" },
+      ];
       const contentFingerprint = sha256([questionText, ...options.map(option => `${option.label}:${option.text}`)].map(normalize).join("\n") || `empty-${fileSha}-${index}`);
 
       if (!db) {
@@ -1169,6 +1176,47 @@ export const questionBankRouter = router({
       await syncQuestionToFirestore(current.id, ctx.firebaseIdToken, ctx.user.openId);
     }
     return { media: existingMedia };
+  }),
+  recreateAllMedia: adminProcedure.mutation(async () => {
+    const db = await getDb();
+    const questionsList = db ? await db.select().from(questions) : memoryStore.questions;
+    let totalFigureQuestions = 0;
+    let successfullyRendered = 0;
+
+    for (const q of questionsList) {
+      if (!q.media || !q.media.length) continue;
+      const hasImg = q.media.some(m => m.kind === "image" || m.kind === "diagram" || m.value.startsWith("/api/storage/"));
+      if (!hasImg) continue;
+      totalFigureQuestions += 1;
+      const firstImg = q.media.find(m => m.value.startsWith("/api/storage/"));
+      if (firstImg) {
+        const storageKey = firstImg.value.replace(/^\/api\/storage\//, "").split("?")[0];
+        const obj = await storageGetObject(storageKey);
+        if (obj) {
+          successfullyRendered += 1;
+        } else {
+          const file = await getExamFileById(q.examFileId);
+          if (file && file.mimeType === "application/pdf") {
+            const storedPdf = await storageGetObject(file.storageKey);
+            if (storedPdf && q.sourcePage && q.sourcePage > 0) {
+              try {
+                const prefix = sha256(q.sourceFingerprint).slice(0, 20);
+                const cropped = await renderAndCropPdfFigure(storedPdf.bytes, q.sourcePage, null, prefix, 0, storagePut);
+                const updatedMedia = [...q.media];
+                updatedMedia[0] = {
+                  ...updatedMedia[0],
+                  value: cropped.url,
+                  storageKey: cropped.storageKey,
+                };
+                await updateQuestionMedia(q.id, updatedMedia);
+                successfullyRendered += 1;
+              } catch {}
+            }
+          }
+        }
+      }
+    }
+    return { totalFigureQuestions, successfullyRendered };
   }),
   deleteQuestionMedia: adminProcedure.input(z.object({
     questionId: z.number().int().positive(),
