@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { AlertTriangle, Check, FileKey2, FileText, LoaderCircle, ShieldCheck, UploadCloud, X } from "lucide-react";
+import { AlertTriangle, BookOpenCheck, Check, FileKey2, FileText, LoaderCircle, ShieldCheck, UploadCloud, X } from "lucide-react";
+import ReviewMediaManager from "@/components/ReviewMediaManager";
 import { getAuthHeaders } from "@/lib/authToken";
 import { trpc } from "@/lib/trpc";
 import { errorMessage, formatBytes, formatDate } from "@/lib/study";
@@ -246,7 +247,12 @@ export default function AnswerKeyImportPanel() {
             <button type="button" className="file-row-link answer-key-source-link bg-transparent border-0 p-0" onClick={() => void openProtectedPdf(entry.answerKeyFileId, entry.sourcePage)}><FileText size={13} /> Cavab mənbəsinin səhifəsini aç</button>
             {entry.candidateQuestions.length > 0 ? <>
               {entry.candidateQuestions.length > 1 && <div className="filter-field answer-key-target"><label htmlFor={`answer-target-${entry.id}`}>Uyğun sualı seçin</label><select id={`answer-target-${entry.id}`} className="select-field" value={question?.id ?? ""} onChange={event => { const id = Number(event.target.value); setSelectedQuestions(previous => ({ ...previous, [entry.id]: id })); setSelectedOptions(previous => ({ ...previous, [entry.id]: "" })); setReplaceExisting(previous => ({ ...previous, [entry.id]: false })); }}><option value="">Sual seçin</option>{entry.candidateQuestions.map(candidate => <option key={candidate.id} value={candidate.id}>{candidate.examYear} · Sual {candidate.questionNumber} · #{candidate.id}</option>)}</select></div>}
-              {question && <div className="answer-key-match"><strong>Uyğun sual #{question.id}</strong><p>{question.originalText}</p><div className="answer-key-options">{question.options.map(option => <label className="answer-key-option" key={option.label}><input type="radio" name={`answer-option-${entry.id}`} checked={optionValue === option.label} disabled={busy} onChange={() => setSelectedOptions(previous => ({ ...previous, [entry.id]: option.label }))} /><span><b>{option.label}</b> · {option.optionText}</span></label>)}</div>
+              {question && <div className="answer-key-match">
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                  <strong>Uyğun sual #{question.id}</strong>
+                  <a href={`/review?question=${question.id}`} target="_blank" rel="noreferrer" className="btn btn-secondary btn-xs"><BookOpenCheck size={12} /> Sualı yoxla / şəkil əlavə et</a>
+                </div>
+                <p>{question.originalText}</p><div className="answer-key-options">{question.options.map(option => <label className="answer-key-option" key={option.label}><input type="radio" name={`answer-option-${entry.id}`} checked={optionValue === option.label} disabled={busy} onChange={() => setSelectedOptions(previous => ({ ...previous, [entry.id]: option.label }))} /><span><b>{option.label}</b> · {option.optionText}</span></label>)}</div>
                 {question.correctOption && question.correctOption !== optionValue && <label className="answer-key-replace"><input type="checkbox" checked={Boolean(replaceExisting[entry.id])} disabled={busy} onChange={event => setReplaceExisting(previous => ({ ...previous, [entry.id]: event.target.checked }))} /> Mövcud “{question.correctOption}” cavabını əvəz etməyə icazə verirəm.</label>}
                 <div className="answer-key-review-actions"><button className="btn btn-primary" disabled={!canConfirm || busy} onClick={() => void confirmEntry(entry, question.id, optionValue)}>{approveMutation.isPending ? "Təsdiqlənir…" : "Cavabı təsdiqlə"} <Check size={14} /></button><button className="btn btn-quiet" disabled={busy} onClick={() => void dismissEntry(entry.id)}>Yoxlanışı bağla</button></div>
               </div>}
