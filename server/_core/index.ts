@@ -3,6 +3,7 @@ import express from "express";
 import { createServer } from "http";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
+import { createHash } from "node:crypto";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { getSessionCookieOptions } from "./cookies";
@@ -18,6 +19,8 @@ import { ensureTopicCatalog, handlePdfUploadRequest, renderExamFilePagePng } fro
 import { getAnswerKeyPdfForAdmin, storeUploadedAnswerKeyPdf } from "../answerKeyImport";
 import { syncAnswerKeyFileToFirestore, syncExamFileToFirestore } from "../firestoreSync";
 import { storageGetObject } from "../storage";
+import { getFirestoreDoc } from "../firestoreRest";
+import { memoryStore } from "../memoryStore";
 import { TRPCError } from "@trpc/server";
 
 async function startServer() {
@@ -92,6 +95,44 @@ async function startServer() {
     } catch {
       res.status(400).json({ error: "Fayl yolu etibarsızdır." });
     }
+  });
+
+  app.get("/api/media/:id", async (req, res) => {
+    const mediaId = req.params.id?.trim();
+    if (!mediaId || !/^[a-zA-Z0-9_\-]+$/.test(mediaId)) {
+      res.status(400).json({ error: "Media ID etibarsızdır." });
+      return;
+    }
+
+    for (const [key, blob] of memoryStore.storageBlobs.entries()) {
+      const h = createHash("sha256").update(blob.bytes).digest("hex");
+      if (h === mediaId || key.includes(mediaId)) {
+        res.set({
+          "Cache-Control": "public, max-age=31536000, immutable",
+          "Content-Type": blob.contentType,
+          "X-Content-Type-Options": "nosniff",
+        }).send(blob.bytes);
+        return;
+      }
+    }
+
+    try {
+      const doc = await getFirestoreDoc(`media/${mediaId}`);
+      if (doc && typeof doc.base64Data === "string") {
+        const bytes = Buffer.from(doc.base64Data, "base64");
+        const contentType = typeof doc.contentType === "string" ? doc.contentType : "image/jpeg";
+        const storageKey = typeof doc.storageKey === "string" ? doc.storageKey : `qebulfit/media/${mediaId}.jpg`;
+        memoryStore.storageBlobs.set(storageKey, { bytes, contentType });
+        res.set({
+          "Cache-Control": "public, max-age=31536000, immutable",
+          "Content-Type": contentType,
+          "X-Content-Type-Options": "nosniff",
+        }).send(bytes);
+        return;
+      }
+    } catch {}
+
+    res.status(404).json({ error: "Şəkil tapılmadı." });
   });
 
   const requireAdminPdfUpload: express.RequestHandler = async (req, res, next) => {

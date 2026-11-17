@@ -208,6 +208,17 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
 
+    function isValidMediaBlob(data) {
+      return data.keys().hasAll(['mediaId', 'storageKey', 'contentType', 'base64Data', 'visibility', 'createdAt'])
+        && data.keys().hasOnly(['mediaId', 'storageKey', 'contentType', 'base64Data', 'visibility', 'createdAt'])
+        && isValidId(data.mediaId)
+        && isValidString(data.storageKey, 1, 512)
+        && data.contentType in ['image/jpeg', 'image/png', 'image/webp']
+        && isValidString(data.base64Data, 1, 1228800)
+        && data.visibility == 'public'
+        && data.createdAt is timestamp;
+    }
+
     // --- Collection Rules ---
 
     // Boot-time connectivity check document (read-only ping)
@@ -435,6 +446,15 @@ service cloud.firestore {
           && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'matchedQuestionId', 'reviewNote', 'updatedAt']);
         allow delete: if isAdmin() && isValidId(fileId) && isValidId(entryId);
       }
+    }
+
+    match /media/{mediaId} {
+      allow get, list: if true;
+      allow create, update: if isAdmin()
+        && isValidId(mediaId)
+        && isValidMediaBlob(incoming())
+        && incoming().createdAt == request.time;
+      allow delete: if isAdmin() && isValidId(mediaId);
     }
   }
 }

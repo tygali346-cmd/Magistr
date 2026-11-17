@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { commitFirestoreBatch, commitFirestoreUpsert, deleteFirestoreDoc, queryPublicCollection } from "./firestoreRest";
 import { memoryStore } from "./memoryStore";
 import type { QuestionMedia } from "../drizzle/schema";
@@ -206,6 +207,22 @@ export async function syncAllToFirestore(idToken: string, adminUid: string) {
     }
   }
 
+  for (const [key, blob] of memoryStore.storageBlobs.entries()) {
+    if (key.startsWith("qebulfit/media/")) {
+      const mediaId = createHash("sha256").update(key).digest("hex").slice(0, 64);
+      writes.push({
+        docPath: `media/${mediaId}`,
+        fields: {
+          mediaId,
+          storageKey: key,
+          contentType: blob.contentType,
+          base64Data: Buffer.from(blob.bytes).toString("base64"),
+          visibility: "public",
+        },
+      });
+    }
+  }
+
   await commitFirestoreBatch(writes, idToken);
 
   for (const ak of memoryStore.answerKeyFiles) {
@@ -237,3 +254,46 @@ export async function hydrateFromFirestore(): Promise<boolean> {
   });
   return true;
 }
+
+export async function migrateMediaToFirestore(idToken: string): Promise<{ migrated: number; skipped: number; failed: number }> {
+  if (!idToken) return { migrated: 0, skipped: 0, failed: 0 };
+  memoryStore.ensureInitialized();
+
+  let migrated = 0;
+  let skipped = 0;
+  let failed = 0;
+
+  const writes: Array<{ docPath: string; fields: Record<string, unknown> }> = [];
+  for (const [key, blob] of memoryStore.storageBlobs.entries()) {
+    if (blob.bytes.byteLength > 900 * 1024) {
+      skipped += 1;
+      continue;
+    }
+    const mediaId = createHash("sha256").update(blob.bytes).digest("hex");
+    writes.push({
+      docPath: `media/${mediaId}`,
+      fields: {
+        mediaId,
+        storageKey: key,
+        contentType: blob.contentType,
+        base64Data: Buffer.from(blob.bytes).toString("base64"),
+        visibility: "public",
+      },
+    });
+  }
+
+  const CHUNK_SIZE = 400;
+  for (let i = 0; i < writes.length; i += CHUNK_SIZE) {
+    const chunk = writes.slice(i, i + CHUNK_SIZE);
+    try {
+      const result = await commitFirestoreBatch(chunk, idToken);
+      migrated += result.committed;
+      failed += result.failed;
+    } catch {
+      failed += chunk.length;
+    }
+  }
+
+  return { migrated, skipped, failed };
+}
+

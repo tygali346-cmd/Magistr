@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
@@ -84,6 +84,8 @@ export async function storagePut(
   const normalized = normalizeKey(relKey);
   const key = options?.deterministic ? normalized : appendHashSuffix(normalized);
   const bytes = typeof data === "string" ? Buffer.from(data, "utf8") : Buffer.from(data);
+  const mediaId = createHash("sha256").update(bytes).digest("hex");
+  const url = key.startsWith("qebulfit/media/") ? `/api/media/${mediaId}` : `/api/storage/${key}`;
   const s3Config = getS3Config();
 
   if (s3Config) {
@@ -96,7 +98,7 @@ export async function storagePut(
         ContentType: contentType,
       }),
     );
-    return { key, url: `/api/storage/${key}` };
+    return { key, url };
   }
 
   memoryStore.storageBlobs.set(key, { bytes, contentType });
@@ -109,7 +111,7 @@ export async function storagePut(
     console.warn("[Storage] Disk yazılması alınmadı, yaddaşda saxlanılır:", error);
   }
 
-  return { key, url: `/api/storage/${key}` };
+  return { key, url };
 }
 
 function inferContentType(key: string): string {

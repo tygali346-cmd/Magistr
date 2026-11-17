@@ -272,3 +272,21 @@ export async function queryPublicCollection(collectionId: string): Promise<Recor
     return [];
   }
 }
+
+export async function getFirestoreDoc(docPath: string): Promise<Record<string, unknown> | null> {
+  try {
+    const url = `${firestoreBaseUrl()}/${docPath}?key=${encodeURIComponent(apiKey)}`;
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const data = (await res.json()) as { fields?: Record<string, FirestoreValue> };
+    if (!data.fields) return null;
+    const obj: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(data.fields)) {
+      obj[k] = fromFirestoreValue(v);
+    }
+    return obj;
+  } catch {
+    return null;
+  }
+}
+

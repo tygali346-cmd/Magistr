@@ -500,6 +500,42 @@
         }
       },
       "required": ["answerKeyFileId", "subjectSlug", "answerToken", "confidence", "status", "createdAt", "updatedAt"]
+    },
+    "MediaBlobRecord": {
+      "title": "MediaBlobRecord",
+      "description": "Compressed JPEG image or diagram stored in Firestore for persistence across restarts.",
+      "type": "object",
+      "properties": {
+        "mediaId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "storageKey": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "contentType": {
+          "type": "string",
+          "enum": ["image/jpeg", "image/png", "image/webp"]
+        },
+        "base64Data": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1228800
+        },
+        "visibility": {
+          "type": "string",
+          "enum": ["public"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["mediaId", "storageKey", "contentType", "base64Data", "visibility", "createdAt"]
     }
   },
   "firestore": {
@@ -546,6 +582,10 @@
     "/answerKeyFiles/{fileId}/entries/{entryId}": {
       "schema": { "$ref": "#/entities/AnswerKeyEntryRecord" },
       "description": "Strictly admin-only answer-key review entries tied to parent answerKeyFiles doc."
+    },
+    "/media/{mediaId}": {
+      "schema": { "$ref": "#/entities/MediaBlobRecord" },
+      "description": "Publicly readable question figures and media blobs stored as compressed JPEGs/Base64."
     }
   }
 }

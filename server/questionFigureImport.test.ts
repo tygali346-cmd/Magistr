@@ -151,7 +151,7 @@ describe("figure bbox schema and PDF cropping", () => {
       storagePut,
     );
     expect(validCrop.needsReview).toBe(false);
-    expect(validCrop.url).toBe("/api/storage/qebulfit/media/testcrop1-p1-f0.jpg");
+    expect(validCrop.url).toMatch(/^\/api\/media\/[a-f0-9]{64}$/);
     const croppedBlob = memoryStore.storageBlobs.get(validCrop.storageKey);
     expect(croppedBlob).toBeTruthy();
     expect(croppedBlob!.contentType).toBe("image/jpeg");
@@ -251,13 +251,13 @@ describe("figure bbox schema and PDF cropping", () => {
     const q1 = memoryStore.questions.find(q => q.examFileId === 999 && q.questionNumber === 1)!;
     expect(q1.media).toHaveLength(2);
     expect(q1.media?.[0]?.role).toBe("question");
-    expect(q1.media?.[0]?.value).toMatch(/^\/api\/storage\/qebulfit\/media\//);
+    expect(q1.media?.[0]?.value).toMatch(/^\/api\/media\/[a-f0-9]{64}$/);
     expect(q1.media?.[1]?.role).toBe("option");
     expect(q1.media?.[1]?.optionLabel).toBe("A");
 
     const q2 = memoryStore.questions.find(q => q.examFileId === 999 && q.questionNumber === 2)!;
     expect(q2.media).toHaveLength(1);
-    expect(q2.media?.[0]?.value).toMatch(/^\/api\/storage\/qebulfit\/media\//);
+    expect(q2.media?.[0]?.value).toMatch(/^\/api\/media\/[a-f0-9]{64}$/);
     expect(q2.reviewStatus).toBe("needs_review");
     expect(q2.reviewNote).toContain("şəkil kəsimi yoxlanmalıdır");
 

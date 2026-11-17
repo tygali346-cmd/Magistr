@@ -30,11 +30,12 @@ describe("firestore.rules Dirty Dozen & structural invariants", () => {
       "match /questionAnswers/{questionId}",
       "match /answerKeyFiles/{fileId}",
       "match /entries/{entryId}",
+      "match /media/{mediaId}",
     ];
     for (const block of expectedMatches) {
       expect(rulesSource).toContain(block);
     }
-    expect(Object.keys(blueprint.firestore)).toHaveLength(11);
+    expect(Object.keys(blueprint.firestore)).toHaveLength(12);
   });
 
   it("blocks Dirty Dozen attack vectors via explicit boolean gates", () => {
